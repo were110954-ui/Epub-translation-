@@ -1,0 +1,25 @@
+[project]
+name = "epub-ai-translator"
+version = "1.0.0"
+description = "Japanese EPUB -> Korean EPUB translator using LLM APIs (structure-preserving, resumable)"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9", "httpx>=0.27", "lxml>=5.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pillow>=10.0"]
+
+[project.scripts]
+epub-translator = "epub_translator.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["epub_translator"]
+
+[tool.setuptools.package-data]
+epub_translator = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

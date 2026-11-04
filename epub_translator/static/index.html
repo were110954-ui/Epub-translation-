@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EPUB AI Translator</title>
+<style>
+:root{--b:#2563eb;--bg:#f6f7fb;--c:#fff;--t:#1f2937;--m:#6b7280}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,'Malgun Gothic','Apple SD Gothic Neo',sans-serif;background:var(--bg);color:var(--t)}
+header{background:#111827;color:#fff;padding:14px 24px}header h1{margin:0;font-size:20px}header small{color:#9ca3af}
+main{max-width:1150px;margin:20px auto;padding:0 16px;display:grid;grid-template-columns:380px 1fr;gap:16px}
+.card{background:var(--c);border-radius:12px;padding:16px;box-shadow:0 1px 3px #0001;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 10px}label{display:block;font-size:12px;color:var(--m);margin:8px 0 3px}
+input,select{width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:7px;font-size:14px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+button{background:var(--b);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}
+button.sec{background:#e5e7eb;color:#111}button.red{background:#dc2626}button:disabled{opacity:.5;cursor:default}
+.bar{height:18px;background:#e5e7eb;border-radius:9px;overflow:hidden}.bar>div{height:100%;background:linear-gradient(90deg,#2563eb,#22c55e);transition:width .4s}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0}.stat{background:#f3f4f6;border-radius:8px;padding:8px;text-align:center}
+.stat b{display:block;font-size:18px}.stat span{font-size:11px;color:var(--m)}
+#events{font-family:ui-monospace,Consolas,monospace;font-size:12px;max-height:240px;overflow:auto;background:#0b1020;color:#cbd5e1;border-radius:8px;padding:8px}
+.warn{color:#fbbf24}.error{color:#f87171}table{width:100%;border-collapse:collapse;font-size:12px}td,th{border-bottom:1px solid #eee;padding:4px;text-align:left}
+.chip{display:inline-block;padding:2px 8px;border-radius:10px;background:#e0e7ff;font-size:12px}.muted{color:var(--m);font-size:12px}
+.chk{display:flex;align-items:center;gap:6px;font-size:13px;margin-top:8px}.chk input{width:auto}
+</style></head><body>
+<header><h1>📖 EPUB AI Translator</h1><small>일본어 전자책 → 한국어 · 구조/서식 보존 · 이어하기 지원 · DRM 파일은 처리하지 않습니다</small></header>
+<main>
+<section>
+ <div class="card"><h2>1. EPUB 업로드</h2>
+  <input type="file" id="file" accept=".epub">
+  <div class="row"><div><label>원본 언어</label><select id="src"><option value="ja">일본어</option><option value="en">영어</option><option value="zh">중국어</option></select></div>
+  <div><label>번역 언어</label><select id="tgt"><option value="ko">한국어</option></select></div></div>
+ </div>
+ <div class="card"><h2>2. AI 모델</h2>
+  <label>엔진</label><select id="engine">
+   <option value="gemini">Google Gemini</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option>
+   <option value="openai_compatible">OpenAI 호환 (Ollama, LM Studio, vLLM…)</option><option value="mock">Mock (오프라인 테스트용)</option></select>
+  <label>모델</label><input id="model" placeholder="기본값 사용">
+  <div id="baseurlbox" style="display:none"><label>Base URL</label><input id="base_url" placeholder="http://localhost:11434/v1"></div>
+  <label>API 키 (이번 작업에만 사용, 저장 안 함)</label><input id="api_key" type="password" placeholder="비우면 저장된 키/환경변수 사용">
+  <div class="muted" id="keystate"></div>
+  <details><summary class="muted">API 키 저장 (로컬 data/secrets.json)</summary>
+   <select id="keyname"><option>GEMINI_API_KEY</option><option>OPENAI_API_KEY</option><option>ANTHROPIC_API_KEY</option><option>OPENAI_COMPAT_API_KEY</option><option>OPENAI_COMPAT_BASE_URL</option></select>
+   <input id="keyval" type="password" placeholder="값 (비우면 삭제)"><button class="sec" onclick="saveKey()" style="margin-top:6px">저장</button></details>
+ </div>
+ <div class="card"><h2>3. 번역 품질 설정</h2>
+  <div class="row"><div><label>Temperature</label><input id="temperature" type="number" step="0.1" min="0" max="1.5" value="0.3"></div>
+  <div><label>동시 요청 수</label><input id="concurrency" type="number" min="1" max="32" value="4"></div></div>
+  <label>청크 크기 (문자, 의미 단위로 조정됨)</label><input id="chunk_size" type="number" min="300" max="20000" value="2500">
+  <label class="chk"><input type="checkbox" id="drop_furigana" checked> 읽기용 후리가나 정리 (의미 있는 루비는 유지)</label>
+  <label class="chk"><input type="checkbox" id="horizontal" checked> 세로쓰기 → 가로쓰기 변환</label>
+  <div style="margin-top:12px" class="row"><button onclick="analyze()">분석 + 비용 추정</button><button onclick="analyze(true)">바로 번역 시작</button></div>
+ </div>
+ <div class="card"><h2>작업 목록</h2><div id="jobs" class="muted">-</div></div>
+</section>
+<section>
+ <div class="card"><h2>진행 상황 <span class="chip" id="status">대기</span></h2>
+  <div id="title" class="muted">파일을 업로드하세요.</div>
+  <div class="bar" style="margin-top:10px"><div id="bar" style="width:0%"></div></div>
+  <div class="muted" id="ptext">0 / 0 블록 (0%) — 실제 처리 완료된 텍스트 블록 기준</div>
+  <div class="stats">
+   <div class="stat"><b id="s_done">0</b><span>완료 블록</span></div><div class="stat"><b id="s_fail">0</b><span>실패/재시도 대기</span></div>
+   <div class="stat"><b id="s_calls">0</b><span>API 호출 / 재시도</span></div><div class="stat"><b id="s_tok">0</b><span>토큰 (입력/출력)</span></div></div>
+  <div>현재 장: <b id="chapter">-</b></div>
+  <div id="estimate" class="muted" style="margin:8px 0"></div>
+  <div class="row" style="margin-top:8px"><button id="b_start" onclick="act('start')" disabled>시작</button><button class="sec" id="b_pause" onclick="act('pause')" disabled>일시정지</button>
+   <button class="sec" id="b_resume" onclick="act('resume')" disabled>재개/이어하기</button><button class="red" id="b_cancel" onclick="act('cancel')" disabled>취소</button></div>
+  <div class="row" style="margin-top:8px"><button id="b_dl" onclick="dl()" disabled>⬇ 번역 EPUB 다운로드</button><button class="sec" id="b_rep" onclick="rep()" disabled>검수 보고서 (HTML)</button></div>
+ </div>
+ <div class="card"><h2>로그 (실패 및 재시도)</h2><div id="events"></div></div>
+ <div class="card"><h2>장별 진행</h2><table id="chapters"></table></div>
+ <div class="card"><h2>용어집 / 인물</h2><div class="row"><input id="g_src" placeholder="원어 (예: 塔野)"><input id="g_tgt" placeholder="번역 (예: 토노)"><button class="sec" onclick="addTerm()">추가/수정</button></div>
+  <table id="gloss"></table></div>
+</section></main>
+<script>
+let JOB=null,timer=null;const $=id=>document.getElementById(id);
+async function api(u,o){const r=await fetch(u,o);if(!r.ok){let t=await r.text();try{t=JSON.parse(t).detail}catch(e){}throw new Error(t)}return r.json()}
+function fd(o){const f=new FormData();for(const k in o)f.append(k,o[k]);return f}
+async function loadCfg(){const c=await api('/api/config');window.CFG=c;$('keystate').textContent='저장된 키: '+Object.entries(c.keys).filter(([k,v])=>v).map(([k,v])=>k+' '+v).join(', ')||'없음';syncModel();}
+function syncModel(){const e=$('engine').value;$('model').placeholder='기본: '+(window.CFG?CFG.default_models[e]:'');$('baseurlbox').style.display=e=='openai_compatible'?'block':'none'}
+$('engine').onchange=syncModel;
+async function saveKey(){await api('/api/keys',{method:'POST',body:fd({name:$('keyname').value,value:$('keyval').value})});$('keyval').value='';loadCfg()}
+async function analyze(auto){const f=$('file').files[0];if(!f)return alert('EPUB 파일을 선택하세요');$('status').textContent='분석 중…';
+ try{const r=await api('/api/jobs',{method:'POST',body:fd({file:f,engine:$('engine').value,model:$('model').value,api_key:$('api_key').value,base_url:$('base_url').value,
+  temperature:$('temperature').value,concurrency:$('concurrency').value,chunk_size:$('chunk_size').value,src_lang:$('src').value,tgt_lang:$('tgt').value,
+  drop_furigana:$('drop_furigana').checked,horizontal:$('horizontal').checked,autostart:!!auto})});
+  JOB=r.job_id;showEst(r.estimate);poll();listJobs()}catch(e){$('status').textContent='오류';alert(e.message)}}
+function showEst(e){$('estimate').innerHTML=`예상: 블록 ${e.blocks.toLocaleString()} · 청크 ${e.chunks} · 원문 ${e.source_chars.toLocaleString()}자 · 토큰 약 ${e.prompt_tokens.toLocaleString()} / ${e.completion_tokens.toLocaleString()} · 비용 약 $${e.cost_usd} <span title="${e.note}">ⓘ</span>`}
+async function act(a){if(!JOB)return;await api(`/api/jobs/${JOB}/${a}`,{method:'POST',body:fd(a=='start'?{api_key:$('api_key').value}:{})});poll()}
+function dl(){location.href=`/api/jobs/${JOB}/download`}function rep(){window.open(`/api/jobs/${JOB}/report.html`)}
+async function poll(){clearTimeout(timer);if(!JOB)return;try{const s=await api('/api/jobs/'+JOB);render(s);
+ if(s.running||['running','building'].includes(s.status))timer=setTimeout(poll,1000);else timer=setTimeout(poll,5000)}catch(e){timer=setTimeout(poll,3000)}}
+function esc(s){return (s??'').toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function render(s){$('status').textContent=s.status+(s.running?' ●':'');$('title').textContent=`${s.title||''} — ${s.file_name} (${s.settings.engine}/${s.settings.model})`;
+ $('bar').style.width=s.progress+'%';$('ptext').textContent=`${s.done_blocks} / ${s.total_blocks} 블록 (${s.progress}%) — 실제 처리 완료된 텍스트 블록 기준`;
+ const c=s.counts;$('s_done').textContent=s.done_blocks;$('s_fail').textContent=(c.failed||0)+' / '+(c.retry||0);
+ $('s_calls').textContent=s.api_calls+' / '+s.retries;$('s_tok').textContent=(s.prompt_tokens/1000).toFixed(1)+'k / '+(s.completion_tokens/1000).toFixed(1)+'k';
+ $('chapter').textContent=s.current_chapter||'-';
+ $('events').innerHTML=s.events.map(e=>`<div class="${e.level}">${new Date(e.ts*1000).toLocaleTimeString()} [${e.level}] ${esc(e.message)}</div>`).join('');
+ $('chapters').innerHTML='<tr><th>장</th><th>완료</th></tr>'+s.chapters.map(x=>`<tr><td>${esc(x.chapter)}</td><td>${x.d||0}/${x.n}</td></tr>`).join('');
+ $('b_start').disabled=s.running;$('b_pause').disabled=!s.running||s.status=='paused';$('b_resume').disabled=s.running&&s.status!='paused';$('b_cancel').disabled=!s.running;
+ const fin=s.status.startsWith('completed');$('b_dl').disabled=!fin;$('b_rep').disabled=!fin;loadGloss()}
+async function loadGloss(){if(!JOB)return;const g=await api(`/api/jobs/${JOB}/glossary`);
+ $('gloss').innerHTML='<tr><th>원어</th><th>번역</th><th>종류</th></tr>'+g.glossary.slice(0,300).map(x=>`<tr><td>${esc(x.source)}</td><td>${esc(x.target)}</td><td>${esc(x.type)}${x.locked?' 🔒':''}</td></tr>`).join('')+
+ (g.characters.length?'<tr><th colspan=3>인물</th></tr>'+g.characters.map(x=>`<tr><td>${esc(x.name)} / ${esc(x.korean)}</td><td colspan=2>${esc(x.speech)} · ${esc(x.honorifics)}</td></tr>`).join(''):'')}
+async function addTerm(){if(!JOB)return;await api(`/api/jobs/${JOB}/glossary`,{method:'POST',body:fd({source:$('g_src').value,target:$('g_tgt').value})});loadGloss()}
+async function listJobs(){const j=await api('/api/jobs');$('jobs').innerHTML=j.map(x=>`<div><a href="#" onclick="JOB='${x.job_id}';poll();return false">${esc(x.title||x.file_name)}</a> <span class="chip">${x.status}</span> ${x.done_blocks}/${x.total_blocks}</div>`).join('')||'-'}
+loadCfg();listJobs();
+</script></body></html>

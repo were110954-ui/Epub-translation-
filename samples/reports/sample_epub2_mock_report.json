@@ -1,0 +1,96 @@
+{
+  "generated": "2026-11-04T09:36:41+09:00",
+  "job": {
+    "job_id": "e3f7c6035c25feea-c6c6d9fa",
+    "title": "星の駅（サンプル）",
+    "file_name": "sample_ja_epub2.epub",
+    "file_hash": "e3f7c6035c25feea7305ac5916c4ecdd37fb0fe943479439b84eb4cab6055b11",
+    "engine": "mock",
+    "model": "mock",
+    "total_blocks": 32,
+    "done_blocks": 32,
+    "failed_blocks": 0,
+    "prompt_tokens": 2367,
+    "completion_tokens": 1269,
+    "api_calls": 1,
+    "retries": 0,
+    "actual_cost_usd": 0.0
+  },
+  "estimate": {
+    "blocks": 32,
+    "chunks": 1,
+    "source_chars": 694,
+    "prompt_tokens": 2498,
+    "completion_tokens": 1186,
+    "cost_usd": 0.0,
+    "price_per_1m": {
+      "input": 0.0,
+      "output": 0.0
+    },
+    "note": "추정치 (재시도/재번역 제외, 모델별 토크나이저 차이 있음)"
+  },
+  "retranslation": {
+    "rounds": 0,
+    "blocks": 0
+  },
+  "structure": {
+    "ok": true,
+    "errors": [],
+    "warnings": [],
+    "checked": {
+      "manifest_items": 8,
+      "xhtml_files": 4,
+      "xhtml_parse_errors": 0,
+      "images": 2,
+      "missing_images": 0,
+      "broken_links": 0,
+      "toc_links": 4,
+      "toc_broken": 0,
+      "cover_declared": true
+    }
+  },
+  "epubcheck": {
+    "available": true,
+    "exit_code": 0,
+    "version": "5.1.0",
+    "fatal": 0,
+    "errors": 0,
+    "warnings": 0,
+    "messages": []
+  },
+  "translation": {
+    "blocks": 32,
+    "ok": 32,
+    "warn": 0,
+    "error": 0,
+    "untranslated": 0,
+    "duplicates": 0,
+    "dialogue_source": 7,
+    "dialogue_preserved": 7,
+    "glossary_inconsistencies": [],
+    "speech_inconsistencies": [],
+    "issues": []
+  },
+  "failed_blocks": [],
+  "glossary": [
+    {
+      "source": "一番星",
+      "target": "놸쏦앣",
+      "type": "name",
+      "reading": ""
+    },
+    {
+      "source": "七月",
+      "target": "눧뭬",
+      "type": "name",
+      "reading": ""
+    },
+    {
+      "source": "二人",
+      "target": "열첚",
+      "type": "name",
+      "reading": ""
+    }
+  ],
+  "characters": []
+}

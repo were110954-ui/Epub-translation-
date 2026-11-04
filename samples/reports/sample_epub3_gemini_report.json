@@ -1,0 +1,115 @@
+{
+  "generated": "2026-11-04T09:31:45+09:00",
+  "job": {
+    "job_id": "0689ad476bc011f1-37196630",
+    "title": "星の駅（サンプル）",
+    "file_name": "sample_ja_epub3.epub",
+    "file_hash": "0689ad476bc011f19e655296186704a16aca3f2ab8c1cfdb3cf99616181c81cd",
+    "engine": "gemini",
+    "model": "gemini-3.5-flash",
+    "total_blocks": 40,
+    "done_blocks": 40,
+    "failed_blocks": 0,
+    "prompt_tokens": 6345,
+    "completion_tokens": 6757,
+    "api_calls": 7,
+    "retries": 4,
+    "actual_cost_usd": 0.0234
+  },
+  "estimate": {
+    "blocks": 40,
+    "chunks": 7,
+    "source_chars": 797,
+    "prompt_tokens": 12816,
+    "completion_tokens": 2825,
+    "cost_usd": 0.0149,
+    "price_per_1m": {
+      "input": 0.5,
+      "output": 3.0
+    },
+    "note": "추정치 (재시도/재번역 제외, 모델별 토크나이저 차이 있음)"
+  },
+  "retranslation": {
+    "rounds": 0,
+    "blocks": 0
+  },
+  "structure": {
+    "ok": true,
+    "errors": [],
+    "warnings": [],
+    "checked": {
+      "manifest_items": 9,
+      "xhtml_files": 5,
+      "xhtml_parse_errors": 0,
+      "images": 2,
+      "missing_images": 0,
+      "broken_links": 0,
+      "toc_links": 10,
+      "toc_broken": 0,
+      "cover_declared": true
+    }
+  },
+  "epubcheck": {
+    "available": true,
+    "exit_code": 0,
+    "version": "5.1.0",
+    "fatal": 0,
+    "errors": 0,
+    "warnings": 0,
+    "messages": []
+  },
+  "translation": {
+    "blocks": 40,
+    "ok": 40,
+    "warn": 0,
+    "error": 0,
+    "untranslated": 0,
+    "duplicates": 0,
+    "dialogue_source": 7,
+    "dialogue_preserved": 7,
+    "glossary_inconsistencies": [],
+    "speech_inconsistencies": [],
+    "issues": []
+  },
+  "failed_blocks": [],
+  "glossary": [
+    {
+      "source": "星の駅",
+      "target": "별의 역",
+      "type": "term",
+      "reading": ""
+    }
+  ],
+  "characters": [
+    {
+      "name": "柏木",
+      "korean": "카시와기",
+      "speech": "존댓말",
+      "honorifics": "선배(遥)"
+    },
+    {
+      "name": "柏木蓮",
+      "korean": "카시와기 렌",
+      "speech": "존댓말",
+      "honorifics": "先輩 (선배)"
+    },
+    {
+      "name": "水瀬遥",
+      "korean": "미나세 하루카",
+      "speech": "반말",
+      "honorifics": "선배"
+    },
+    {
+      "name": "蓮",
+      "korean": "렌",
+      "speech": "존댓말, 카시와기 렌",
+      "honorifics": "선배(遥)"
+    },
+    {
+      "name": "遥",
+      "korean": "하루카",
+      "speech": "",
+      "honorifics": ""
+    }
+  ]
+}
