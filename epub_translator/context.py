@@ -22,6 +22,10 @@ new_terms/characters: include only proper nouns / recurring terms / characters t
 
 def build_prompt(src_lang, tgt_lang, chunk_blocks, glossary, characters, summaries, prev_pairs, chapter):
     system = SYSTEM_PROMPT.format(src=LANG_NAMES.get(src_lang, src_lang), tgt=LANG_NAMES.get(tgt_lang, tgt_lang))
+    if any(b.get("kind") == "balloon" for b in chunk_blocks):
+        system += ("\n11. These blocks are comic speech balloons. Translate each balloon on its own, keep the line short "
+                   "enough to letter inside the balloon, and keep each character's speech style consistent with the glossary "
+                   "and character notes. Do not omit a balloon or merge two balloons into one line.")
     text_all = " ".join(b["source"] for b in chunk_blocks)
     # only relevant glossary entries (appearing in chunk) + top-level names, to bound prompt size
     rel = [g for g in glossary if g["source"] and g["source"] in text_all]
@@ -50,6 +54,8 @@ def build_prompt(src_lang, tgt_lang, chunk_blocks, glossary, characters, summari
             item["readings"] = hints
         if b["kind"] in ("ncx", "title", "meta"):
             item["note"] = "table-of-contents/title label"
+        elif b.get("kind") == "balloon":
+            item["note"] = "comic speech balloon " + str(b.get("xpath") or "")
         req.append(item)
     parts.append(f"Translate these {len(req)} blocks. Return JSON only.\n<<<BLOCKS\n" +
                  json.dumps(req, ensure_ascii=False, indent=0) + "\nBLOCKS>>>")

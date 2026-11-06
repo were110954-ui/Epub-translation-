@@ -9,7 +9,17 @@ import sys
 import time
 
 from .config import DATA_DIR, load_dotenv, load_secrets
+from .epub_model import DRMError
 from .pipeline import JobManager
+from .safety import RightsError, SafetyError
+
+
+def _create(jm, path, settings):
+    try:
+        return jm.create_job(path, settings)
+    except (RightsError, DRMError, SafetyError, ValueError) as e:
+        print(str(e), file=sys.stderr)
+        return None
 
 
 def main(argv=None):
@@ -34,6 +44,13 @@ def main(argv=None):
     t.add_argument("--report-dir", help="보고서 복사 위치")
     t.add_argument("--data-dir", default=DATA_DIR)
     t.add_argument("--src-lang", default="ja", help="원문 언어 (ja/en/zh)")
+    t.add_argument("--mode", default="auto", choices=["auto", "epub", "pdf", "cbz", "comic"],
+                   help="auto는 확장자/매직바이트. comic은 PDF/CBZ 만화 번역")
+    t.add_argument("--dpi", type=int, default=300, help="PDF 렌더 DPI (300-600). 임베디드 이미지와 같으면 사용하지 않음")
+    t.add_argument("--page-parallel", type=int, default=2, help="페이지 병렬 (1-4)")
+    t.add_argument("--ocr-backend", default="auto", choices=["auto", "tesseract", "rapidocr", "easyocr", "fixture"])
+    t.add_argument("--ltr", action="store_true", help="좌→우 읽기 (기본은 만화 RTL)")
+    t.add_argument("--rights-ack", action="store_true", help="PDF/CBZ/만화: 적법한 번역·변환 권한이 있음")
     e = sub.add_parser("estimate", help="토큰/비용 추정만")
     e.add_argument("epub")
     e.add_argument("--engine", default="gemini")
@@ -52,13 +69,20 @@ def main(argv=None):
         return 0
     jm = JobManager(a.data_dir)
     settings = {"engine": a.engine, "model": a.model, "chunk_size": a.chunk_size}
+    if a.cmd == "translate":
+        settings.update(mode=a.mode, dpi=a.dpi, page_parallel=a.page_parallel, ocr_backend=a.ocr_backend,
+                        rtl=not a.ltr, rights_ack=bool(a.rights_ack))
     if a.cmd == "estimate":
-        job = jm.create_job(a.epub, settings)
+        job = _create(jm, a.epub, settings)
+        if not job:
+            return 2
         print(json.dumps(jm.job_estimate(job["job_id"]), ensure_ascii=False, indent=2))
         return 0
     settings.update(src_lang=a.src_lang, base_url=a.base_url, temperature=a.temperature, concurrency=a.concurrency,
                     drop_furigana=not a.keep_furigana, max_output_tokens=a.max_output_tokens, max_retries=a.max_retries, horizontal=not a.keep_vertical, run_epubcheck=not a.no_epubcheck)
-    job = jm.create_job(a.epub, settings)
+    job = _create(jm, a.epub, settings)
+    if not job:
+        return 2
     jid = job["job_id"]
     print(f"job {jid}: {job['title']}  blocks={job['total_blocks']}")
     print("estimate:", json.dumps(jm.job_estimate(jid), ensure_ascii=False))

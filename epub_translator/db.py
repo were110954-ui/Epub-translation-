@@ -43,7 +43,40 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _colnames(self, table: str) -> set[str]:
+        return {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+
+    def _migrate(self):
+        """Additive only. Existing rows, glossary, and settings JSON are left in place."""
+        cols = self._colnames("jobs")
+        if "mode" not in cols:
+            self.conn.execute("ALTER TABLE jobs ADD COLUMN mode TEXT DEFAULT 'epub'")
+        if "input_kind" not in cols:
+            self.conn.execute("ALTER TABLE jobs ADD COLUMN input_kind TEXT DEFAULT 'epub'")
+        self.conn.executescript("""
+CREATE TABLE IF NOT EXISTS schema_migrations(id TEXT PRIMARY KEY, applied REAL);
+CREATE TABLE IF NOT EXISTS pages(
+  job_id TEXT NOT NULL, page_id TEXT NOT NULL, idx INTEGER NOT NULL, src_name TEXT,
+  width INTEGER DEFAULT 0, height INTEGER DEFAULT 0, media_type TEXT, method TEXT,
+  sha256 TEXT, byte_size INTEGER DEFAULT 0, spread INTEGER DEFAULT 0,
+  stage TEXT DEFAULT 'planned', attempts INTEGER DEFAULT 0, error TEXT, updated REAL,
+  PRIMARY KEY(job_id, page_id));
+CREATE INDEX IF NOT EXISTS ix_pages_job ON pages(job_id, idx);
+CREATE TABLE IF NOT EXISTS regions(
+  job_id TEXT NOT NULL, region_id TEXT NOT NULL, page_id TEXT NOT NULL, idx INTEGER NOT NULL,
+  x INTEGER, y INTEGER, w INTEGER, h INTEGER, direction TEXT, ocr_text TEXT, translation TEXT,
+  confidence REAL, font TEXT, font_size REAL, status TEXT DEFAULT 'pending', flags TEXT DEFAULT '[]',
+  review INTEGER DEFAULT 0, edited INTEGER DEFAULT 0, updated REAL,
+  PRIMARY KEY(job_id, region_id));
+CREATE INDEX IF NOT EXISTS ix_regions_page ON regions(job_id, page_id, idx);
+""")
+        self.conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations(id, applied) VALUES('2026-11-image-modes', ?)",
+            (time.time(),),
+        )
 
     def x(self, sql, args=(), many=False):
         with self.lock:

@@ -228,6 +228,10 @@ def write_reports(report: dict, json_path: str, html_path: str):
     chars = "".join(f"<tr><td>{e(c['name'])}</td><td>{e(c.get('korean') or '')}</td><td>{e(c.get('speech') or '')}</td><td>{e(c.get('honorifics') or '')}</td></tr>"
                     for c in report.get("characters", []))
     j = report.get("job", {})
+    image = report.get("image_pipeline")
+    image_html = ""
+    if image:
+        image_html = "<h2>이미지/만화 파이프라인</h2><pre>" + e(json.dumps(image, ensure_ascii=False, indent=1)[:20000]) + "</pre>"
     doc = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>번역 검수 보고서 - {e(j.get('title') or '')}</title>
 <style>body{{font-family:system-ui,'Malgun Gothic',sans-serif;margin:24px;color:#222}}table{{border-collapse:collapse;width:100%;font-size:13px}}
 td,th{{border:1px solid #ddd;padding:4px 6px;vertical-align:top}}th{{background:#f3f3f3}}tr.error td{{background:#fff0f0}}tr.warn td{{background:#fffbe6}}
@@ -240,6 +244,7 @@ td,th{{border:1px solid #ddd;padding:4px 6px;vertical-align:top}}th{{background:
 <div class="card">토큰 in/out {j.get('prompt_tokens',0):,}/{j.get('completion_tokens',0):,}</div>
 <div class="card">API 호출 {j.get('api_calls',0)} / 재시도 {j.get('retries',0)}</div>
 <div class="card">재번역 라운드 {report.get('retranslation',{}).get('rounds',0)} (블록 {report.get('retranslation',{}).get('blocks',0)})</div>
+{image_html}
 <h2>1차: 구조 검사 <span class="{'ok' if s.get('ok') else 'bad'}">{'통과' if s.get('ok') else '문제 있음'}</span></h2>
 <pre>{e(json.dumps(s.get('checked',{}), ensure_ascii=False, indent=1))}</pre><ul>{''.join(f'<li class=bad>{e(x)}</li>' for x in s.get('errors',[]))}{''.join(f'<li>{e(x)}</li>' for x in s.get('warnings',[])[:100])}</ul>
 <h2>EPUBCheck</h2><p>{e(json.dumps({k: v for k, v in ec.items() if k != 'messages'}, ensure_ascii=False))}</p><ul>{ecm}</ul>

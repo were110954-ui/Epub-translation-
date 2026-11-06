@@ -29,7 +29,8 @@ DEFAULT_SETTINGS = {
     "engine": "mock", "model": "", "api_key": "", "base_url": "", "temperature": 0.3,
     "concurrency": 4, "chunk_size": 2500, "max_retries": 4, "src_lang": "ja", "tgt_lang": "ko",
     "drop_furigana": True, "horizontal": True, "retranslate_rounds": 2, "max_output_tokens": 16384,
-    "run_epubcheck": True,
+    "run_epubcheck": True, "dpi": 300, "page_parallel": 2, "rtl": True, "rights_ack": False,
+    "ocr_backend": "auto",
 }
 
 
@@ -70,9 +71,20 @@ class JobManager:
     def create_job(self, src_path: str, settings: dict, file_name: str | None = None) -> dict:
         s = {**DEFAULT_SETTINGS, **{k: v for k, v in settings.items() if v not in (None, "")}}
         s["model"] = s.get("model") or DEFAULT_MODELS[s["engine"]]
+        api_key = s.pop("api_key", "") or ""
+        name = file_name or os.path.basename(src_path)
+        from .ingest import resolve_mode
+        from .safety import RightsError
+        mode, kind = resolve_mode(src_path, name, s.get("mode"))
+        s["mode"] = mode
+        s["input_kind"] = kind
+        if mode != "epub":
+            if not s.get("rights_ack"):
+                raise RightsError("이 파일을 번역·변환할 법적 권한이 있는지 확인해야 합니다. 권리 확인 후에만 진행할 수 있습니다.")
+            from .image_jobs import create_image_job
+            return create_image_job(self, src_path, s, name, api_key)
         fh = sha256_file(src_path)
         job_id = job_key(fh, s)
-        api_key = s.pop("api_key", "")
         if api_key:
             self.secrets[job_id] = api_key
         existing = self.db.get_job(job_id)
@@ -135,6 +147,26 @@ class JobManager:
     def job_estimate(self, job_id):
         j = self.db.get_job(job_id)
         s = json.loads(j["settings"])
+        mode = s.get("mode") or "epub"
+        if mode in ("pdf", "cbz"):
+            n = self.db.q1("SELECT COUNT(*) n FROM pages WHERE job_id=?", (job_id,))["n"]
+            return {"blocks": n, "chunks": 0, "source_chars": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                    "cost_usd": 0.0, "price_per_1m": {"input": 0, "output": 0},
+                    "note": "PDF/CBZ를 EPUB으로 변환만 합니다. 번역 API를 호출하지 않습니다."}
+        if mode == "comic":
+            rows = self.db.q("SELECT source FROM blocks WHERE job_id=? AND kind='balloon'", (job_id,))
+            if rows:
+                chunks = self.db.q("SELECT chunk_id FROM chunks WHERE job_id=?", (job_id,))
+                est = estimate(rows, chunks or [{"chunk_id": "pending"}], s["model"])
+                est["note"] = "검출된 대사 기준 추정치입니다 (재시도 제외)."
+                return est
+            n = self.db.q1("SELECT COUNT(*) n FROM pages WHERE job_id=?", (job_id,))["n"] or 1
+            fake = [{"source": "あ" * 20} for _ in range(max(1, n * 4))]
+            chunks = [{"chunk_id": str(i)} for i in range(max(1, n))]
+            est = estimate(fake, chunks, s["model"])
+            est["note"] = "OCR 이전 가정치입니다 (페이지당 대사 4개). 실제 비용은 검출 결과에 따릅니다."
+            est["provisional"] = True
+            return est
         rows = self.db.q("SELECT source FROM blocks WHERE job_id=?", (job_id,))
         chunks = self.db.q("SELECT chunk_id FROM chunks WHERE job_id=?", (job_id,))
         return estimate(rows, chunks, s["model"])
@@ -184,6 +216,10 @@ class JobManager:
         db = self.db
         job = db.get_job(job_id)
         s = json.loads(job["settings"])
+        if (s.get("mode") or "epub") != "epub":
+            from .image_jobs import run_image_job
+            await run_image_job(self, job_id)
+            return
         try:
             engine = make_engine({**s, "api_key": self.secrets.get(job_id, "")})
         except EngineError as e:
@@ -325,7 +361,7 @@ class JobManager:
         prev_chunks = db.q("SELECT c.summary FROM chunks c JOIN blocks b ON b.job_id=c.job_id AND b.chunk_id=c.chunk_id "
                            "WHERE c.job_id=? AND c.summary IS NOT NULL AND c.summary!='' GROUP BY c.chunk_id "
                            "HAVING MIN(b.idx) < ? ORDER BY MIN(b.idx)", (job_id, first_idx))
-        prev = db.q("SELECT source,target FROM blocks WHERE job_id=? AND idx<? AND target IS NOT NULL AND kind='block' "
+        prev = db.q("SELECT source,target FROM blocks WHERE job_id=? AND idx<? AND target IS NOT NULL AND kind IN ('block','balloon') "
                     "ORDER BY idx DESC LIMIT 4", (job_id, first_idx))
         return glossary, chars, [p["summary"] for p in prev_chunks], [(p["source"], p["target"]) for p in reversed(prev)]
 
@@ -488,4 +524,19 @@ class JobManager:
         j["chapters"] = chapters
         j["events"] = self.db.events(job_id, 30)
         j["running"] = job_id in self.tasks and not self.tasks[job_id].done()
+        pages = self.db.q(
+            "SELECT page_id, idx, stage, width, height, spread, method, error FROM pages WHERE job_id=? ORDER BY idx",
+            (job_id,),
+        )
+        for page in pages:
+            if page.get("error"):
+                page["error"] = str(page["error"])[:200]
+        j["page_progress"] = {
+            "total": len(pages),
+            "done": sum(1 for p in pages if p["stage"] == "done"),
+            "failed": sum(1 for p in pages if p["stage"] == "failed"),
+            "pages": pages,
+        }
+        review = self.db.q1("SELECT COUNT(*) n FROM regions WHERE job_id=? AND review=1", (job_id,))
+        j["review_count"] = review["n"] if review else 0
         return j

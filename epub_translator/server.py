@@ -11,7 +11,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from .config import DATA_DIR, load_dotenv, load_secrets, masked, save_secret
 from .engines import DEFAULT_MODELS, PRICES
 from .epub_model import DRMError, EpubError
+from .image_jobs import editor_state, page_image_path, rebuild_edited, retranslate_region, update_region
 from .pipeline import JobManager
+from .safety import MAX_UPLOAD, RightsError, SafetyError
 
 load_dotenv()
 load_secrets()
@@ -51,26 +53,50 @@ async def create_job(file: UploadFile = File(...), engine: str = Form("mock"), m
                      api_key: str = Form(""), base_url: str = Form(""), temperature: float = Form(0.3),
                      concurrency: int = Form(4), chunk_size: int = Form(2500), src_lang: str = Form("ja"),
                      tgt_lang: str = Form("ko"), drop_furigana: bool = Form(True), horizontal: bool = Form(True),
-                     autostart: bool = Form(False)):
+                     autostart: bool = Form(False), mode: str = Form("auto"), dpi: int = Form(300),
+                     page_parallel: int = Form(2), rtl: bool = Form(True), rights_ack: bool = Form(False),
+                     ocr_backend: str = Form("auto")):
     if engine not in DEFAULT_MODELS:
         raise HTTPException(400, "unknown engine")
+    if mode not in ("auto", "epub", "pdf", "cbz", "comic"):
+        raise HTTPException(400, "unknown mode")
+    if ocr_backend not in ("auto", "tesseract", "rapidocr", "easyocr", "fixture"):
+        raise HTTPException(400, "unknown ocr backend")
     name = re.sub(r"[^\w.\-가-힣ぁ-んァ-ン一-龥 ()]", "_", os.path.basename(file.filename or "book.epub"))
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as tmp:
-        while chunk := await file.read(1 << 20):
-            tmp.write(chunk)
-        tmp_path = tmp.name
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in (".epub", ".pdf", ".cbz", ".zip"):
+        ext = ".bin"
+    tmp_path = None
     try:
-        job = jm().create_job(tmp_path, dict(engine=engine, model=model, api_key=api_key, base_url=base_url,
-                                             temperature=temperature, concurrency=max(1, min(32, concurrency)),
-                                             chunk_size=max(300, min(20000, chunk_size)), src_lang=src_lang,
-                                             tgt_lang=tgt_lang, drop_furigana=drop_furigana, horizontal=horizontal),
-                              file_name=name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp_path = tmp.name
+            total = 0
+            while chunk := await file.read(1 << 20):
+                total += len(chunk)
+                if total > MAX_UPLOAD:
+                    raise HTTPException(413, "파일이 너무 큽니다")
+                tmp.write(chunk)
+        job = jm().create_job(tmp_path, dict(
+            engine=engine, model=model, api_key=api_key, base_url=base_url,
+            temperature=temperature, concurrency=max(1, min(32, concurrency)),
+            chunk_size=max(300, min(20000, chunk_size)), src_lang=src_lang,
+            tgt_lang=tgt_lang, drop_furigana=drop_furigana, horizontal=horizontal,
+            mode=mode, dpi=dpi, page_parallel=max(1, min(4, page_parallel)), rtl=rtl,
+            rights_ack=rights_ack, ocr_backend=ocr_backend,
+        ), file_name=name)
+    except RightsError as e:
+        raise HTTPException(422, str(e))
     except DRMError as e:
         raise HTTPException(422, str(e))
-    except (EpubError, Exception) as e:
-        raise HTTPException(400, f"EPUB 분석 실패: {e}")
+    except (SafetyError, EpubError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"파일 분석 실패: {e}")
     finally:
-        os.unlink(tmp_path)
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
     if autostart:
         jm().start(job["job_id"])
     return {"job_id": job["job_id"], "estimate": jm().job_estimate(job["job_id"]), "status": jm().status(job["job_id"])}
@@ -166,3 +192,69 @@ def report(job_id: str, fmt: str):
     if fmt not in ("json", "html") or not os.path.exists(p):
         raise HTTPException(404, "보고서 없음")
     return FileResponse(p, media_type="application/json" if fmt == "json" else "text/html")
+
+
+@app.get("/api/jobs/{job_id}/editor")
+def job_editor(job_id: str):
+    _job(job_id)
+    return editor_state(jm(), job_id)
+
+
+@app.get("/api/jobs/{job_id}/pages/{page_id}/image")
+def page_image(job_id: str, page_id: str, variant: str = "original"):
+    _job(job_id)
+    try:
+        path = page_image_path(jm(), job_id, page_id, variant)
+    except SafetyError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError:
+        raise HTTPException(404, "이미지 없음")
+    media = "image/png"
+    if path.endswith(".jpg") or path.endswith(".jpeg"):
+        media = "image/jpeg"
+    elif path.endswith(".webp"):
+        media = "image/webp"
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/jobs/{job_id}/regions/{region_id}")
+def region_update(job_id: str, region_id: str, ocr_text: str | None = Form(None), translation: str | None = Form(None),
+                  font: str | None = Form(None), font_size: float | None = Form(None),
+                  x: int | None = Form(None), y: int | None = Form(None), w: int | None = Form(None), h: int | None = Form(None)):
+    _job(job_id)
+    fields = {"ocr_text": ocr_text, "translation": translation, "font": font, "font_size": font_size,
+              "x": x, "y": y, "w": w, "h": h}
+    try:
+        row = update_region(jm(), job_id, region_id, fields)
+    except SafetyError as e:
+        raise HTTPException(400, str(e))
+    except KeyError:
+        raise HTTPException(404, "영역 없음")
+    return {"region_id": row["region_id"], "x": row["x"], "y": row["y"], "w": row["w"], "h": row["h"],
+            "translation": row["translation"], "ocr_text": row["ocr_text"], "font": row["font"], "font_size": row["font_size"]}
+
+
+@app.post("/api/jobs/{job_id}/regions/{region_id}/retranslate")
+async def region_retranslate(job_id: str, region_id: str):
+    _job(job_id)
+    try:
+        row = await retranslate_region(jm(), job_id, region_id)
+    except KeyError:
+        raise HTTPException(404, "영역 없음")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e)[:300])
+    return {"region_id": region_id, "translation": row.get("translation"), "status": row.get("status")}
+
+
+@app.post("/api/jobs/{job_id}/rebuild")
+async def job_rebuild(job_id: str):
+    _job(job_id)
+    try:
+        await rebuild_edited(jm(), job_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True, "status": jm().status(job_id)}
