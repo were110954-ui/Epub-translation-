@@ -9,7 +9,7 @@ import sys
 import time
 
 from .config import DATA_DIR, load_dotenv, load_secrets
-from .epub_model import DRMError
+from .epub_model import DRMError, EpubError
 from .pipeline import JobManager
 from .safety import RightsError, SafetyError
 
@@ -57,11 +57,23 @@ def main(argv=None):
     e.add_argument("--model", default="")
     e.add_argument("--chunk-size", type=int, default=2500)
     e.add_argument("--data-dir", default=DATA_DIR)
+    r = sub.add_parser("restyle", help="번역된 소설 EPUB에 한국어 본문 서체만 다시 적용 (API 없음)")
+    r.add_argument("epub")
+    r.add_argument("-o", "--output", required=True)
     s = sub.add_parser("serve", help="웹 UI 실행")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
     a = ap.parse_args(argv)
 
+    if a.cmd == "restyle":
+        from .rebuild import restyle_epub
+        try:
+            restyle_epub(a.epub, a.output)
+        except (DRMError, EpubError, ValueError) as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        print("restyled:", a.output)
+        return 0
     if a.cmd == "serve":
         import uvicorn
         print(f"EPUB AI Translator: http://{a.host}:{a.port}")

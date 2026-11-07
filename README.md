@@ -37,6 +37,8 @@ python -m epub_translator estimate 책.epub --engine gemini --chunk-size 2500
 python -m pytest -v          # 또는 run_tests.bat
 ```
 
+소설 번역본의 기본 서체는 명조 계열 폴백, 줄간격 1.65, 문단 간격 0, 첫 줄 들여쓰기 1em이다. `!important`와 px 글자 크기는 쓰지 않아서 리더의 글꼴·크기·간격 설정이 덮어쓸 수 있다. 드롭캡과 첫 글자 굵기는 없애고, `em`/`strong`과 제목·장면 구분·삽화는 남긴다. 이미 번역된 파일은 API 없이 `python -m epub_translator restyle 책.epub -o 책.restyle.epub` 로 같은 기본값을 다시 입힌다. 고정 레이아웃 만화에는 적용하지 않는다.
+
 ## PDF / CBZ / 만화
 
 파일 형식에 따라 모드가 갈립니다. 소설 EPUB 번역(기존 큐, 엔진, 체크포인트, 일시정지)은 그대로입니다.
