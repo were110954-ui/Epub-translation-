@@ -68,7 +68,8 @@ async def create_job(file: UploadFile = File(...), engine: str = Form("mock"), m
                      tgt_lang: str = Form("ko"), drop_furigana: bool = Form(True), horizontal: bool = Form(True),
                      autostart: bool = Form(False), mode: str = Form("auto"), dpi: int = Form(300),
                      page_parallel: int = Form(2), rtl: bool = Form(True), rights_ack: bool = Form(False),
-                     ocr_backend: str = Form("auto")):
+                     ocr_backend: str = Form("auto"), manga_quality: str = Form("basic"),
+                     image_input_ack: str = Form("false"), hq_review: str = Form("true")):
     if engine not in DEFAULT_MODELS:
         raise HTTPException(400, "unknown engine")
     if mode == "pdf":
@@ -77,6 +78,8 @@ async def create_job(file: UploadFile = File(...), engine: str = Form("mock"), m
         raise HTTPException(400, "unknown mode")
     if ocr_backend not in ("auto", "tesseract", "rapidocr", "easyocr", "fixture"):
         raise HTTPException(400, "unknown ocr backend")
+    if manga_quality not in ("basic", "hq"):
+        raise HTTPException(400, "unknown manga quality")
     name = re.sub(r"[^\w.\-가-힣ぁ-んァ-ン一-龥 ()]", "_", os.path.basename(file.filename or "book.epub"))
     ext = os.path.splitext(name)[1].lower()
     if ext not in (".epub", ".pdf", ".cbz", ".zip"):
@@ -98,6 +101,9 @@ async def create_job(file: UploadFile = File(...), engine: str = Form("mock"), m
             tgt_lang=tgt_lang, drop_furigana=drop_furigana, horizontal=horizontal,
             mode=mode, dpi=dpi, page_parallel=max(1, min(4, page_parallel)), rtl=rtl,
             rights_ack=rights_ack, ocr_backend=ocr_backend,
+            manga_quality=manga_quality,
+            image_input_ack=str(image_input_ack).lower() in ("1", "true", "yes", "on"),
+            hq_review=str(hq_review).lower() not in ("0", "false", "no", "off"),
         ), file_name=name)
     except RightsError as e:
         raise HTTPException(422, str(e))

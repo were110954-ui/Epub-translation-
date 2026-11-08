@@ -85,6 +85,14 @@ CREATE INDEX IF NOT EXISTS ix_regions_page ON regions(job_id, page_id, idx);
                 (time.time(),),
             )
             self.conn.commit()
+        page_cols = self._colnames("pages")
+        if page_cols and "hq_json" not in page_cols:
+            self.conn.execute("ALTER TABLE pages ADD COLUMN hq_json TEXT")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations(id, applied) VALUES('2026-11-hq-review', ?)",
+                (time.time(),),
+            )
+            self.conn.commit()
 
     def x(self, sql, args=(), many=False):
         with self.lock:

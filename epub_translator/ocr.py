@@ -19,6 +19,10 @@ REVIEW_FLAGS = {
     "placement-uncertain", "ocr-empty", "low-confidence", "inpaint-flat-plate",
     "ocr-failed", "ocr-backend-error", "typeset-overflow", "outside-balloon",
     "direction-uncertain", "effect-uncertain", "furigana-uncertain",
+    "name-uncertain", "pun-uncertain", "ocr-uncertain", "missed-group",
+    "model-proposed", "hq-untrusted-text", "hq-empty-reading",
+    "tiny-text", "typeset-overlap", "vertical-korean", "mask-leak", "leftover-source",
+    "review-stale", "ai-review-note",
 }
 
 
