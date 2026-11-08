@@ -1,6 +1,8 @@
 """Bounded 300-page conversion. Images stay on disk; parallelism stays capped."""
 import os
 
+import pytest
+
 from epub_translator.image_jobs import SLOTS
 from epub_translator.pipeline import JobManager
 from epub_translator.qa import find_epubcheck, structure_check
@@ -41,7 +43,7 @@ def test_three_hundred_cbz_pages(tmp_path):
 
 
 def test_three_hundred_pdf_embedded_jpegs(tmp_path):
-    """Same bound for PDF extraction. Uses tiny JPEGs so the test is about page count, not pixels."""
+    """PDF bytes still extract inside comic translation. Standalone conversion is not this test."""
     SLOTS.reset()
     pages = []
     raws = []
@@ -53,13 +55,18 @@ def test_three_hundred_pdf_embedded_jpegs(tmp_path):
     pdf.write_bytes(build_image_pdf(pages))
     before = pdf.read_bytes()
     jm = JobManager(str(tmp_path / "data"))
+    with pytest.raises(Exception) as denied:
+        jm.create_job(str(pdf), {"engine": "mock", "mode": "pdf", "rights_ack": True})
+    assert "변환" in str(denied.value)
+    assert jm.db.q("SELECT job_id FROM jobs") == []
     job = jm.create_job(str(pdf), {
-        "engine": "mock", "mode": "pdf", "rights_ack": True, "dpi": 300, "page_parallel": 2,
-        "run_epubcheck": False,
+        "engine": "mock", "mode": "comic", "ocr_backend": "fixture", "rights_ack": True,
+        "dpi": 300, "page_parallel": 2, "run_epubcheck": False,
     })
     run_job(jm, job["job_id"])
     st = jm.db.get_job(job["job_id"])
-    assert st["status"] == "completed", st["error"]
+    assert str(st["status"]).startswith("completed"), st["error"]
+    assert st["api_calls"] == 0
     assert SLOTS.peak <= 2
     assert jm.db.q1("SELECT COUNT(*) n FROM pages WHERE job_id=? AND stage='done'", (job["job_id"],))["n"] == 300
     import zipfile

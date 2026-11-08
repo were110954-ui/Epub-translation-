@@ -29,13 +29,14 @@ button.sec{background:#e5e7eb;color:#111}button.red{background:#dc2626}button:di
 textarea{min-height:52px}
 </style></head><body>
 <header><h1>📖 EPUB AI Translator</h1>
-<small>EPUB 소설 번역 · PDF/CBZ → 고정 레이아웃 EPUB · 만화 OCR/식자 · 원본은 수정하지 않음 · DRM은 처리하지 않습니다</small></header>
+<small>EPUB 소설 번역 · CBZ → 고정 레이아웃 EPUB · PDF/CBZ 만화 번역 · 번역 없는 PDF 변환은 없음 · DRM은 처리하지 않습니다</small></header>
 <main>
 <section>
  <div class="card"><h2>1. 파일</h2>
   <input type="file" id="file" accept=".epub,.pdf,.cbz,.zip">
-  <div id="modeLabel" class="muted">파일을 고르면 EPUB / PDF / CBZ / 만화 모드가 정해집니다.</div>
-  <label class="chk" id="comicBox" style="display:none"><input type="checkbox" id="comic"> 만화 AI 번역·식자 (PDF/CBZ 이미지)</label>
+  <div id="modeLabel" class="muted">EPUB은 소설 번역, CBZ는 변환입니다. PDF는 만화 번역을 켠 경우에만 처리합니다.</div>
+  <p id="pdfNote" class="muted" style="display:none">PDF는 리더에서 그대로 볼 수 있어, 번역 없이 EPUB으로만 바꾸는 기능은 없습니다. 아래 만화 번역을 켜야 이 PDF를 올리며, 켜기 전에는 번역 API를 호출하지 않습니다.</p>
+  <label class="chk" id="comicBox" style="display:none"><input type="checkbox" id="comic"> 만화 AI 번역·식자 (PDF 또는 CBZ)</label>
   <div class="row"><div><label>원본 언어</label><select id="src"><option value="ja">일본어</option><option value="en">영어</option><option value="zh">중국어</option></select></div>
   <div><label>번역 언어</label><select id="tgt"><option value="ko">한국어</option></select></div></div>
   <div id="dpiBox" style="display:none">
@@ -116,16 +117,21 @@ $('engine').onchange=syncModel;
 $('file').onchange=syncMode;$('comic').onchange=syncMode;
 function syncMode(){const f=$('file').files[0];const name=(f?f.name:'').toLowerCase();
  KIND=name.endsWith('.pdf')?'pdf':(name.endsWith('.cbz')||name.endsWith('.zip')?'cbz':'epub');
- const comic=$('comic').checked&&KIND!=='epub';MODE=comic?'comic':KIND;
- const labels={epub:'EPUB 소설 번역',pdf:'PDF → EPUB3 고정 레이아웃',cbz:'CBZ → EPUB3 고정 레이아웃',comic:'만화 AI 번역·식자'};
- $('modeLabel').textContent='선택된 모드: '+(labels[MODE]||MODE)+(f?' · '+f.name:'');
- $('modeChip').textContent=labels[MODE]||MODE;
- $('dpiBox').style.display=KIND==='pdf'?'block':'none';
+ const comic=$('comic').checked&&KIND!=='epub';
+ MODE=(KIND==='pdf'&&!comic)?'':(comic?'comic':KIND);
+ const labels={epub:'EPUB 소설 번역','':'PDF는 만화 번역만',cbz:'CBZ → EPUB3 고정 레이아웃',comic:'만화 AI 번역·식자'};
+ const shown=KIND==='pdf'&&!comic?'PDF: 변환만 하는 모드는 없습니다. 만화 번역을 켜세요.':('선택된 모드: '+(labels[MODE]||MODE));
+ $('modeLabel').textContent=shown+(f?' · '+f.name:'');
+ $('modeChip').textContent=labels[MODE]||MODE||'-';
+ $('pdfNote').style.display=KIND==='pdf'?'block':'none';
+ $('dpiBox').style.display=(KIND==='pdf'&&comic)?'block':'none';
  $('comicBox').style.display=KIND==='epub'?'none':'flex';
  $('ocrBox').style.display=MODE==='comic'?'block':'none';
  $('novelOpts').style.display=KIND==='epub'?'block':'none';}
 async function saveKey(){await api('/api/keys',{method:'POST',body:fd({name:$('keyname').value,value:$('keyval').value})});$('keyval').value='';loadCfg()}
 async function analyze(auto){const f=$('file').files[0];if(!f)return alert('파일을 선택하세요');
+ if(KIND==='pdf'&&!$('comic').checked)return alert('PDF를 EPUB으로만 바꾸지는 않습니다. 리더에서 그대로 열 수 있습니다. 만화 AI 번역을 켠 뒤에만 분석합니다. 지금은 번역 API를 호출하지 않습니다.');
+ if(!MODE)return alert('처리할 모드가 없습니다.');
  if(!$('rights').checked)return alert('적법한 번역·변환 권한을 확인해야 합니다.');
  $('status').textContent='분석 중…';
  try{const r=await api('/api/jobs',{method:'POST',body:fd({file:f,engine:$('engine').value,model:$('model').value,api_key:$('api_key').value,base_url:$('base_url').value,
@@ -141,7 +147,7 @@ async function poll(){clearTimeout(timer);if(!JOB)return;try{const s=await api('
 function esc(s){return (s??'').toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function render(s){const mode=s.settings.mode||'epub';
  $('status').textContent=s.status+(s.running?' ●':'');
- $('modeChip').textContent={epub:'EPUB 소설',pdf:'PDF→EPUB',cbz:'CBZ→EPUB',comic:'만화 번역'}[mode]||mode;
+ $('modeChip').textContent={epub:'EPUB 소설',pdf:'PDF 변환(중단)',cbz:'CBZ→EPUB',comic:'만화 번역'}[mode]||mode;
  $('title').textContent=`${s.title||''} — ${s.file_name} (${s.settings.engine}/${s.settings.model})`;
  $('bar').style.width=s.progress+'%';
  let pages='';

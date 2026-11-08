@@ -44,8 +44,8 @@ def main(argv=None):
     t.add_argument("--report-dir", help="보고서 복사 위치")
     t.add_argument("--data-dir", default=DATA_DIR)
     t.add_argument("--src-lang", default="ja", help="원문 언어 (ja/en/zh)")
-    t.add_argument("--mode", default="auto", choices=["auto", "epub", "pdf", "cbz", "comic"],
-                   help="auto는 확장자/매직바이트. comic은 PDF/CBZ 만화 번역")
+    t.add_argument("--mode", default="auto", choices=["auto", "epub", "cbz", "comic"],
+                   help="auto는 EPUB 소설 또는 CBZ 변환. PDF는 --mode comic 만 가능")
     t.add_argument("--dpi", type=int, default=300, help="PDF 렌더 DPI (300-600). 임베디드 이미지와 같으면 사용하지 않음")
     t.add_argument("--page-parallel", type=int, default=2, help="페이지 병렬 (1-4)")
     t.add_argument("--ocr-backend", default="auto", choices=["auto", "tesseract", "rapidocr", "easyocr", "fixture"])

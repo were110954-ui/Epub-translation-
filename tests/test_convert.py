@@ -38,9 +38,12 @@ def test_rights_required(tmp_path):
     pdf = tmp_path / "a.pdf"
     pdf.write_bytes(build_image_pdf([(jpg, 40, 60, 300, 450)]))
     jm = JobManager(str(tmp_path / "data"))
-    with pytest.raises(Exception) as ei:
-        jm.create_job(str(pdf), {"engine": "mock", "mode": "pdf", "rights_ack": False})
-    assert "권한" in str(ei.value)
+    with pytest.raises(SafetyError) as ei:
+        jm.create_job(str(pdf), {"engine": "mock", "mode": "pdf", "rights_ack": True})
+    assert "변환" in str(ei.value)
+    assert jm.db.q("SELECT job_id FROM jobs") == []
+    with pytest.raises(SafetyError):
+        jm.create_job(str(pdf), {"engine": "mock", "rights_ack": True})
 
 
 def test_path_traversal_and_pixel_bomb(tmp_path):
@@ -76,13 +79,15 @@ def test_pdf_jpeg_bytes_survive_and_order(tmp_path):
     ]))
     before = sha(pdf)
     jm = JobManager(str(tmp_path / "data"))
-    job = jm.create_job(str(pdf), {"engine": "mock", "mode": "pdf", "rights_ack": True, "dpi": 300, "rtl": True})
+    job = jm.create_job(str(pdf), {"engine": "mock", "mode": "comic", "ocr_backend": "fixture",
+                                   "rights_ack": True, "dpi": 300, "rtl": True})
 
     import asyncio
     run_job(jm, job["job_id"])
     st = jm.db.get_job(job["job_id"])
     assert sha(pdf) == before
-    assert st["status"] == "completed", st["error"]
+    assert str(st["status"]).startswith("completed"), st["error"]
+    assert st["api_calls"] == 0
     assert st["file_hash"] == sha(jm.db.get_job(job["job_id"])["src_path"])
     z = zipfile.ZipFile(st["out_path"])
     assert z.infolist()[0].filename == "mimetype" and z.infolist()[0].compress_type == zipfile.ZIP_STORED
@@ -145,7 +150,8 @@ def test_render_fallback_and_missing_renderer(tmp_path, monkeypatch):
     pdf = tmp_path / "text.pdf"
     pdf.write_bytes(build_text_pdf())
     jm = JobManager(str(tmp_path / "data"))
-    job = jm.create_job(str(pdf), {"engine": "mock", "mode": "pdf", "rights_ack": True, "dpi": 300, "run_epubcheck": False})
+    job = jm.create_job(str(pdf), {"engine": "mock", "mode": "comic", "ocr_backend": "fixture",
+                                   "rights_ack": True, "dpi": 300, "run_epubcheck": False})
     import asyncio
     run_job(jm, job["job_id"])
     page = jm.db.q1("SELECT * FROM pages WHERE job_id=?", (job["job_id"],))
@@ -163,7 +169,8 @@ def test_render_fallback_and_missing_renderer(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pdf_convert, "render_pdf_page", boom)
     jm2 = JobManager(str(tmp_path / "data2"))
-    job2 = jm2.create_job(str(mixed), {"engine": "mock", "mode": "pdf", "rights_ack": True, "dpi": 300, "run_epubcheck": False})
+    job2 = jm2.create_job(str(mixed), {"engine": "mock", "mode": "comic", "ocr_backend": "fixture",
+                                     "rights_ack": True, "dpi": 300, "run_epubcheck": False})
     run_job(jm2, job2["job_id"])
     st2 = jm2.db.get_job(job2["job_id"])
     assert st2["status"] == "completed_with_issues", st2["error"]
@@ -189,7 +196,7 @@ def test_encrypted_pdf_refused(tmp_path):
         writer.write(f)
     jm = JobManager(str(tmp_path / "data"))
     with pytest.raises(DRMError):
-        jm.create_job(str(path), {"engine": "mock", "mode": "pdf", "rights_ack": True})
+        jm.create_job(str(path), {"engine": "mock", "mode": "comic", "rights_ack": True})
 
 
 def test_image_pause_cancel_resume(tmp_path, monkeypatch):

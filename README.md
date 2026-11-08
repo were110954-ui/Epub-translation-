@@ -39,23 +39,22 @@ python -m pytest -v          # 또는 run_tests.bat
 
 소설 번역본의 기본 서체는 명조 계열 폴백, 줄간격 1.65, 문단 간격 0, 첫 줄 들여쓰기 1em이다. `!important`와 px 글자 크기는 쓰지 않아서 리더의 글꼴·크기·간격 설정이 덮어쓸 수 있다. 드롭캡과 첫 글자 굵기는 없애고, `em`/`strong`과 제목·장면 구분·삽화는 남긴다. 이미 번역된 파일은 API 없이 `python -m epub_translator restyle 책.epub -o 책.restyle.epub` 로 같은 기본값을 다시 입힌다. 고정 레이아웃 만화에는 적용하지 않는다.
 
-## PDF / CBZ / 만화
+## CBZ 변환 / 만화 번역
 
-파일 형식에 따라 모드가 갈립니다. 소설 EPUB 번역(기존 큐, 엔진, 체크포인트, 일시정지)은 그대로입니다.
+PDF를 번역 없이 EPUB으로 바꾸지는 않습니다. PDF는 리더에서 그대로 열 수 있습니다. PDF는 **만화 AI 번역**을 켠 경우에만 받고, 켜기 전에는 작업을 만들거나 번역 API를 호출하지 않습니다. 예전에 만들어 둔 PDF 변환 결과와 DB 기록은 지우지 않으며, 완료된 파일은 받을 수 있습니다. 그 작업의 시작·재개는 거부됩니다.
 
 | 파일 | 모드 | 하는 일 |
 | --- | --- | --- |
 | `.epub` | 소설 번역 | 기존 파이프라인. DRM EPUB은 거부 |
-| `.pdf` | PDF → EPUB3 고정 레이아웃 | 페이지가 임베디드 이미지 한 장이면 JPEG 바이트를 재인코딩하지 않음. 아니면 300–600 DPI 렌더(PyMuPDF 또는 pdftoppm) |
 | `.cbz`/`.zip` | CBZ → EPUB3 고정 레이아웃 | JPG/PNG/WebP, 자연 정렬, 원본 바이트 유지. RTL 기본 |
-| PDF/CBZ + "만화 AI 번역·식자" | 만화 | 말풍선 휴리스틱, 일본어 OCR, 기존 LLM으로 한국어 번역, 단색 배경 복원, HTML 식자, 편집기 |
+| PDF 또는 CBZ + 만화 번역 | 만화 | 말풍선 휴리스틱, 일본어 OCR, 기존 LLM으로 한국어 번역, 단색 배경 복원, HTML 식자, 편집기. PDF 페이지가 이미지 한 장이면 그 바이트를 재인코딩하지 않음 |
 
-시작 전에 **적법한 번역·변환 권한**을 확인해야 합니다. PDF/CBZ/만화는 이 확인이 없으면 작업을 만들지 않습니다.
+시작 전에 **적법한 번역·변환 권한**을 확인해야 합니다. CBZ와 만화는 이 확인이 없으면 작업을 만들지 않습니다.
 
 ```bash
-python -m epub_translator translate 책.pdf --mode pdf --rights-ack --dpi 300 -o 책.fxl.epub
 python -m epub_translator translate 책.cbz --mode cbz --rights-ack --ltr -o 책.fxl.epub
 python -m epub_translator translate 책.cbz --mode comic --engine gemini --rights-ack -o 책.ko.epub
+python -m epub_translator translate 책.pdf --mode comic --engine gemini --rights-ack -o 책.ko.epub
 ```
 
 OCR·PDF 렌더의 선택 설치는 `docs/OPTIONAL_DEPS.md`. 소설만 쓸 때는 `requirements.txt`만 설치하면 됩니다.
@@ -118,6 +117,6 @@ CSS와 인라인 style의 `writing-mode`/`-epub-writing-mode`/`-webkit-writing-m
 - 장(파일) 사이를 병렬 처리하므로 **다른 장의 요약**은 그 장이 먼저 끝났을 때만 전달됩니다 (용어집/인물 DB는 공유). `--concurrency 1`이면 완전 순차.
 - 인물 말투 불일치 검사는 휴리스틱(존댓말/반말 비율)이며 화자 판별은 하지 않습니다. 결과는 참고용.
 - 비용은 추정치이며 모델 가격표(`engines.py`의 `PRICES`)는 직접 갱신해야 할 수 있습니다.
-- 소설 EPUB 안의 그림 글자는 이 모드에서 번역하지 않습니다. 스캔/만화는 PDF·CBZ 만화 모드를 쓰며, 말풍선 검출과 배경 복원은 휴리스틱입니다.
+- 소설 EPUB 안의 그림 글자는 이 모드에서 번역하지 않습니다. 만화는 CBZ 또는 PDF를 만화 모드로 올리며, 말풍선 검출과 배경 복원은 휴리스틱입니다. 번역 없는 PDF→EPUB 변환은 없습니다.
 - WebP는 바이트를 유지하지만 EPUBCheck는 WebP를 핵심 미디어 타입으로 보지 않을 수 있습니다.
 - 무료 API 키는 일일 요청 수 제한이 있어 장편은 여러 날에 걸쳐 이어하기가 필요할 수 있습니다 (큰 `--chunk-size`로 요청 수 감소).

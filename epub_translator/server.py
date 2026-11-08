@@ -13,6 +13,7 @@ from .engines import DEFAULT_MODELS, PRICES
 from .epub_model import DRMError, EpubError
 from .image_jobs import editor_state, page_image_path, rebuild_edited, retranslate_region, update_region
 from .pipeline import JobManager
+from .ingest import PDF_CONVERSION_REMOVED
 from .safety import MAX_UPLOAD, RightsError, SafetyError
 
 load_dotenv()
@@ -58,7 +59,9 @@ async def create_job(file: UploadFile = File(...), engine: str = Form("mock"), m
                      ocr_backend: str = Form("auto")):
     if engine not in DEFAULT_MODELS:
         raise HTTPException(400, "unknown engine")
-    if mode not in ("auto", "epub", "pdf", "cbz", "comic"):
+    if mode == "pdf":
+        raise HTTPException(400, PDF_CONVERSION_REMOVED)
+    if mode not in ("auto", "epub", "cbz", "comic"):
         raise HTTPException(400, "unknown mode")
     if ocr_backend not in ("auto", "tesseract", "rapidocr", "easyocr", "fixture"):
         raise HTTPException(400, "unknown ocr backend")
@@ -120,11 +123,14 @@ def job_status(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/start")
-def job_start(job_id: str, api_key: str = Form("")):
+async def job_start(job_id: str, api_key: str = Form("")):
     _job(job_id)
     if api_key:
         jm().secrets[job_id] = api_key
-    jm().start(job_id)
+    try:
+        jm().start(job_id)
+    except SafetyError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
@@ -136,9 +142,12 @@ def job_pause(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/resume")
-def job_resume(job_id: str):
+async def job_resume(job_id: str):
     _job(job_id)
-    jm().resume(job_id)
+    try:
+        jm().resume(job_id)
+    except SafetyError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 

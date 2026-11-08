@@ -148,11 +148,16 @@ class JobManager:
         j = self.db.get_job(job_id)
         s = json.loads(j["settings"])
         mode = s.get("mode") or "epub"
-        if mode in ("pdf", "cbz"):
+        if mode == "pdf":
             n = self.db.q1("SELECT COUNT(*) n FROM pages WHERE job_id=?", (job_id,))["n"]
             return {"blocks": n, "chunks": 0, "source_chars": 0, "prompt_tokens": 0, "completion_tokens": 0,
                     "cost_usd": 0.0, "price_per_1m": {"input": 0, "output": 0},
-                    "note": "PDF/CBZ를 EPUB으로 변환만 합니다. 번역 API를 호출하지 않습니다."}
+                    "note": "번역 없는 PDF→EPUB 변환은 제거되었습니다. 이 기록과 결과 파일은 유지됩니다. 재개할 수 없습니다."}
+        if mode == "cbz":
+            n = self.db.q1("SELECT COUNT(*) n FROM pages WHERE job_id=?", (job_id,))["n"]
+            return {"blocks": n, "chunks": 0, "source_chars": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                    "cost_usd": 0.0, "price_per_1m": {"input": 0, "output": 0},
+                    "note": "CBZ를 EPUB으로 변환만 합니다. 번역 API를 호출하지 않습니다."}
         if mode == "comic":
             rows = self.db.q("SELECT source FROM blocks WHERE job_id=? AND kind='balloon'", (job_id,))
             if rows:
@@ -172,7 +177,30 @@ class JobManager:
         return estimate(rows, chunks, s["model"])
 
     # ------------------------------------------------------------ control
+    def _retired_pdf_conversion(self, job_id) -> bool:
+        """Old translation-free PDF jobs stay in the database. They cannot be started again."""
+        job = self.db.get_job(job_id)
+        if not job:
+            return False
+        try:
+            settings = json.loads(job["settings"] or "{}")
+        except json.JSONDecodeError:
+            settings = {}
+        if (settings.get("mode") or job.get("mode") or "") != "pdf":
+            return False
+        from .ingest import PDF_CONVERSION_REMOVED
+        self.db.event(job_id, "warn", PDF_CONVERSION_REMOVED)
+        if str(job.get("status") or "").startswith("completed"):
+            self.db.update_job(job_id, error=PDF_CONVERSION_REMOVED[:500])
+        else:
+            self.db.update_job(job_id, status="cancelled", error=PDF_CONVERSION_REMOVED[:500])
+        return True
+
     def start(self, job_id) -> asyncio.Task:
+        if self._retired_pdf_conversion(job_id):
+            from .safety import SafetyError
+            from .ingest import PDF_CONVERSION_REMOVED
+            raise SafetyError(PDF_CONVERSION_REMOVED)
         if job_id in self.tasks and not self.tasks[job_id].done():
             return self.tasks[job_id]
         self.cancel.discard(job_id)

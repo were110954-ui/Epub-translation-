@@ -97,6 +97,9 @@ def _page_block_id(page_id: str) -> str:
 
 
 def create_image_job(jm, src_path: str, settings: dict, file_name: str, api_key: str = "") -> dict:
+    if settings.get("mode") == "pdf":
+        from .ingest import PDF_CONVERSION_REMOVED
+        raise SafetyError(PDF_CONVERSION_REMOVED)
     if not settings.get("rights_ack"):
         raise RightsError("이 파일을 번역·변환할 법적 권한이 있는지 확인해야 합니다.")
     configure_pillow()
@@ -666,6 +669,12 @@ async def run_image_job(jm, job_id: str):
     job = db.get_job(job_id)
     settings = json.loads(job["settings"])
     retranslation = {"rounds": 0, "blocks": 0}
+    if settings.get("mode") == "pdf":
+        from .ingest import PDF_CONVERSION_REMOVED
+        db.event(job_id, "warn", PDF_CONVERSION_REMOVED)
+        if not str(job.get("status") or "").startswith("completed"):
+            db.update_job(job_id, status="cancelled", error=PDF_CONVERSION_REMOVED[:500])
+        return
     try:
         if not settings.get("rights_ack"):
             raise RightsError("법적 권한 확인이 없습니다.")
