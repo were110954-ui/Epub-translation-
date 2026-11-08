@@ -1,9 +1,9 @@
-"""Japanese OCR adapters and balloon detection.
+"""Japanese OCR adapters.
 
-Detection is a CPU heuristic (bright regions closed off from the page edge). It is not a
-segmentation model. Text recognition uses an installed backend only: Tesseract, RapidOCR, or
-EasyOCR. There is no fake recognizer in the default path. Tests pass a fixture backend that
-reads text embedded in the PNG and is labeled as not real OCR.
+Text boxes come from text_lines: one horizontal line or one vertical column, not a panel.
+Recognition uses an installed backend only: Tesseract, RapidOCR, or EasyOCR. There is no
+fake recognizer in the default path. Tests pass a fixture backend that reads text embedded
+in the PNG and is labeled as not real OCR.
 """
 from __future__ import annotations
 import importlib.util
@@ -17,7 +17,12 @@ from .safety import OcrUnavailable
 
 REVIEW_FLAGS = {
     "placement-uncertain", "ocr-empty", "low-confidence", "inpaint-flat-plate",
-    "ocr-failed", "ocr-backend-error",
+    "ocr-failed", "ocr-backend-error", "typeset-overflow", "outside-balloon",
+    "direction-uncertain", "effect-uncertain", "furigana-uncertain",
+    "name-uncertain", "pun-uncertain", "ocr-uncertain", "missed-group",
+    "model-proposed", "hq-untrusted-text", "hq-empty-reading",
+    "tiny-text", "typeset-overlap", "vertical-korean", "mask-leak", "leftover-source",
+    "review-stale", "ai-review-note",
 }
 
 
@@ -32,7 +37,7 @@ def direction_of(w: int, h: int) -> str:
 
 
 def order_regions(regions: list[dict], rtl: bool = True) -> list[dict]:
-    """Manga reading order: rows from top to bottom, and right-to-left inside a row when rtl."""
+    """Rows top to bottom. Inside a row, right-to-left when rtl."""
     items = [dict(r) for r in regions]
     if not items:
         return []
@@ -53,39 +58,76 @@ def order_regions(regions: list[dict], rtl: bool = True) -> list[dict]:
     return ordered
 
 
-def detect_balloons(image, rtl: bool = True) -> list[dict]:
-    """Find outlined bright blobs. `image` is a Pillow image. Boxes are in original pixels."""
-    from PIL import Image
-    im = image.convert("RGB")
-    width, height = im.size
-    scale = 1.0
-    max_edge = 1000
-    if max(width, height) > max_edge:
-        scale = max_edge / max(width, height)
-        small = im.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.Resampling.BILINEAR)
-    else:
-        small = im
-    gray = small.convert("L")
-    gw, gh = gray.size
-    pix = gray.tobytes()
-    total = gw * gh
-    white = bytearray(1 if pix[i] >= 242 else 0 for i in range(total))
-    seen = bytearray(total)
-    min_area = max(80, int(total * 0.002))
-    max_area = int(total * 0.45)
+def order_manga_regions(regions: list[dict], rtl: bool = True, page_h: int | None = None) -> list[dict]:
+    """Panel bands from top to bottom. Vertical text in a band is ordered as columns.
+
+    Japanese vertical columns run right-to-left, and each column runs top to bottom.
+    Horizontal balloons stay in row order. This is an independent reading-order rule,
+    not a copy of another application's sorter.
+    """
+    items = [dict(r) for r in regions]
+    if not items:
+        return []
+    heights = sorted(r["h"] for r in items)
+    median_h = heights[len(heights) // 2]
+    gap_limit = max(28, int(median_h * 0.9))
+    if page_h:
+        gap_limit = max(gap_limit, int(page_h * 0.04))
+    items.sort(key=lambda r: (r["y"], r["x"]))
+    bands: list[list] = [[items[0]]]
+    for region in items[1:]:
+        prev = bands[-1][-1]
+        gap = region["y"] - (prev["y"] + prev["h"])
+        if gap > gap_limit:
+            bands.append([region])
+        else:
+            bands[-1].append(region)
+    ordered = []
+    for band in bands:
+        vertical = [r for r in band if r["h"] >= r["w"] * 1.2]
+        if vertical and len(vertical) * 2 >= len(band):
+            columns: list[list] = []
+            for region in sorted(vertical, key=lambda r: r["x"] + r["w"] / 2, reverse=bool(rtl)):
+                cx = region["x"] + region["w"] / 2
+                placed = False
+                for column in columns:
+                    ccx = sum(c["x"] + c["w"] / 2 for c in column) / len(column)
+                    if abs(cx - ccx) <= max(region["w"], column[0]["w"]) * 0.8:
+                        column.append(region)
+                        placed = True
+                        break
+                if not placed:
+                    columns.append([region])
+            if rtl:
+                columns.sort(key=lambda col: -sum(c["x"] for c in col) / len(col))
+            else:
+                columns.sort(key=lambda col: sum(c["x"] for c in col) / len(col))
+            for column in columns:
+                column.sort(key=lambda r: r["y"])
+                ordered.extend(column)
+            horizontal = [r for r in band if r not in vertical]
+            ordered.extend(order_regions(horizontal, rtl=rtl))
+        else:
+            ordered.extend(order_regions(band, rtl=rtl))
+    for i, region in enumerate(ordered):
+        region["idx"] = i
+    return ordered
+
+
+def _cc_boxes(mask: bytearray, width: int, height: int, min_area: int) -> list[dict]:
+    seen = bytearray(width * height)
     boxes = []
-    for start in range(total):
-        if not white[start] or seen[start]:
+    for start in range(width * height):
+        if not mask[start] or seen[start]:
             continue
         stack = [start]
         seen[start] = 1
         count = 0
-        minx = maxx = start % gw
-        miny = maxy = start // gw
-        touches = False
+        minx = maxx = start % width
+        miny = maxy = start // width
         while stack:
             i = stack.pop()
-            x, y = i % gw, i // gw
+            x, y = i % width, i // width
             count += 1
             if x < minx:
                 minx = x
@@ -95,33 +137,27 @@ def detect_balloons(image, rtl: bool = True) -> list[dict]:
                 miny = y
             elif y > maxy:
                 maxy = y
-            if x == 0 or y == 0 or x == gw - 1 or y == gh - 1:
-                touches = True
-            for j, ok in ((i - 1, x > 0), (i + 1, x + 1 < gw), (i - gw, y > 0), (i + gw, y + 1 < gh)):
-                if ok and white[j] and not seen[j]:
+            for j, ok in ((i - 1, x > 0), (i + 1, x + 1 < width), (i - width, y > 0), (i + width, y + 1 < height)):
+                if ok and mask[j] and not seen[j]:
                     seen[j] = 1
                     stack.append(j)
-        if touches or count < min_area or count > max_area:
-            continue
         bw, bh = maxx - minx + 1, maxy - miny + 1
-        if bw < 8 or bh < 8 or bw / bh > 8 or bh / bw > 8:
+        if count < min_area or bw < 2 or bh < 2:
             continue
-        inv = 1.0 / scale
-        x0 = max(0, min(width - 1, int(round(minx * inv))))
-        y0 = max(0, min(height - 1, int(round(miny * inv))))
-        x1 = max(x0 + 1, min(width, int(round((maxx + 1) * inv))))
-        y1 = max(y0 + 1, min(height, int(round((maxy + 1) * inv))))
-        flags = []
-        if x0 <= 1 or y0 <= 1 or x1 >= width - 1 or y1 >= height - 1:
-            flags.append("placement-uncertain")
-        if (x1 - x0) * (y1 - y0) > 0.30 * width * height:
-            flags.append("placement-uncertain")
-        boxes.append({
-            "x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0,
-            "direction": direction_of(x1 - x0, y1 - y0),
-            "confidence": 0.8, "flags": flags,
-        })
-    return order_regions(boxes, rtl=rtl)
+        if bw * bh > 400 and count / (bw * bh) < 0.12:
+            continue
+        if bw > width * 0.72 and bh < 7:
+            continue
+        if bh > height * 0.72 and bw < 7:
+            continue
+        boxes.append({"x": minx, "y": miny, "w": bw, "h": bh})
+    return boxes
+
+
+def detect_balloons(image, rtl: bool = True) -> list[dict]:
+    """Text lines only. The name stays so older callers keep working."""
+    from .text_lines import detect_text_lines
+    return detect_text_lines(image, rtl=rtl)
 
 
 def gpu_info() -> dict:
@@ -210,13 +246,16 @@ class TesseractBackend(OcrBackend):
     real = True
     label = "tesseract (CPU)"
 
-    def recognize(self, image, direction: str):
-        from PIL import Image
-        lang = "jpn_vert" if direction == "vertical" and "jpn_vert" in tesseract_langs() else "jpn"
+    def _once(self, image, direction: str):
+        from PIL import Image, ImageOps
+        langs = tesseract_langs()
+        lang = "jpn_vert" if direction == "vertical" and "jpn_vert" in langs else "jpn"
         psm = "5" if direction == "vertical" else "6"
-        im = image.convert("RGB")
-        if min(im.size) < 40:
-            im = im.resize((im.width * 2, im.height * 2), Image.Resampling.NEAREST)
+        im = ImageOps.autocontrast(image.convert("L")).convert("RGB")
+        short = min(im.size)
+        if short < 64:
+            factor = max(2, (64 + short - 1) // short)
+            im = im.resize((im.width * factor, im.height * factor), Image.Resampling.NEAREST)
         pad = Image.new("RGB", (im.width + 16, im.height + 16), (255, 255, 255))
         pad.paste(im, (8, 8))
         import io
@@ -245,6 +284,15 @@ class TesseractBackend(OcrBackend):
         text = normalize_ocr_text("".join(words))
         conf = (sum(confs) / len(confs) / 100.0) if confs else 0.0
         flags = [] if text else ["ocr-empty"]
+        return text, conf, flags
+
+    def recognize(self, image, direction: str):
+        text, conf, flags = self._once(image, direction)
+        other = "horizontal" if direction == "vertical" else "vertical"
+        if conf < 0.55 or not text:
+            alt, alt_conf, alt_flags = self._once(image, other)
+            if alt_conf > conf and alt:
+                return alt, alt_conf, alt_flags + ["direction-checked"]
         return text, conf, flags
 
 
@@ -382,7 +430,7 @@ def recognize_page(path: str, backend: OcrBackend, rtl: bool = True) -> tuple[li
                     "ocr_text": text, "confidence": conf, "flags": flags,
                     "review": 1 if needs_review(conf, flags) else 0,
                 })
-            if len(detected) != len(regions):
+            if detected and len(detected) != len(regions):
                 for region in regions:
                     if "detection-count-mismatch" not in region["flags"]:
                         region["flags"].append("detection-count-mismatch")

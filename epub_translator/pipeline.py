@@ -30,7 +30,7 @@ DEFAULT_SETTINGS = {
     "concurrency": 4, "chunk_size": 2500, "max_retries": 4, "src_lang": "ja", "tgt_lang": "ko",
     "drop_furigana": True, "horizontal": True, "retranslate_rounds": 2, "max_output_tokens": 16384,
     "run_epubcheck": True, "dpi": 300, "page_parallel": 2, "rtl": True, "rights_ack": False,
-    "ocr_backend": "auto",
+    "ocr_backend": "auto", "manga_quality": "basic", "image_input_ack": False, "hq_review": True,
 }
 
 

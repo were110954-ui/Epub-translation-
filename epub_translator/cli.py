@@ -51,6 +51,9 @@ def main(argv=None):
     t.add_argument("--ocr-backend", default="auto", choices=["auto", "tesseract", "rapidocr", "easyocr", "fixture"])
     t.add_argument("--ltr", action="store_true", help="좌→우 읽기 (기본은 만화 RTL)")
     t.add_argument("--rights-ack", action="store_true", help="PDF/CBZ/만화: 적법한 번역·변환 권한이 있음")
+    t.add_argument("--manga-hq", action="store_true", help="만화 고품질: 선택한 모델에 페이지 이미지를 보냄")
+    t.add_argument("--image-input-ack", action="store_true", help="그 모델이 이미지를 받고, 페이지가 그 제공자에게 가는 것을 확인")
+    t.add_argument("--no-hq-review", action="store_true", help="고품질 식자 후 이미지 검수 호출을 생략")
     e = sub.add_parser("estimate", help="토큰/비용 추정만")
     e.add_argument("epub")
     e.add_argument("--engine", default="gemini")
@@ -83,7 +86,10 @@ def main(argv=None):
     settings = {"engine": a.engine, "model": a.model, "chunk_size": a.chunk_size}
     if a.cmd == "translate":
         settings.update(mode=a.mode, dpi=a.dpi, page_parallel=a.page_parallel, ocr_backend=a.ocr_backend,
-                        rtl=not a.ltr, rights_ack=bool(a.rights_ack))
+                        rtl=not a.ltr, rights_ack=bool(a.rights_ack),
+                        manga_quality="hq" if a.manga_hq else "basic",
+                        image_input_ack=bool(a.image_input_ack),
+                        hq_review=not a.no_hq_review)
     if a.cmd == "estimate":
         job = _create(jm, a.epub, settings)
         if not job:

@@ -16,17 +16,23 @@ import time
 
 from .cbz_convert import extract_cbz_member, scan_cbz
 from .epub_model import DRMError, sha256_file
-from .fxl import compare_output, fit_font_size, write_fxl_epub
+from .fxl import compare_output, layout_korean_text, write_fxl_epub
 from .inpaint import restore_regions
 from .ocr import gpu_info, make_backend, needs_review, recognize_page
 from .pdf_convert import PdfEncrypted, extract_pdf_page, inspect_pdf
 from .qa import run_epubcheck, structure_check, translation_check, write_reports
 from .safety import RightsError, SafetyError, clamp_dpi, clamp_parallel, configure_pillow
 
+_ERASE_BLOCK = {
+    "low-confidence", "effect-uncertain", "placement-uncertain", "ocr-empty",
+    "ocr-failed", "ocr-backend-error", "direction-uncertain",
+}
+
 LIMITS = [
-    "말풍선 검출은 테두리로 닫힌 밝은 영역의 휴리스틱입니다. 효과선·반투명·겹친 말풍선은 놓치거나 합쳐질 수 있습니다.",
-    "일본어 제거는 생성형 인페인트가 아닙니다. 평탄한 색만 획 단위로 칠하고, 복잡하면 단색 플레이트로 가리며 검토로 표시합니다.",
-    "한국어 식자는 고정 레이아웃 HTML 오버레이입니다. 글자 크기는 영역 대비 추정치이고 편집기에서 고칩니다.",
+    "글자 검출은 가로 한 줄 또는 세로 한 열의 CPU 휴리스틱입니다. 칸이나 말풍선 전체를 글자 영역으로 쓰지 않습니다. 손글씨·후리가나·효과음은 불확실하면 검토입니다.",
+    "일본어 제거는 생성형 인페인트가 아닙니다. 확신 있는 줄의 어두운 획만 지우고, 확신이 낮으면 원본 픽셀을 유지합니다.",
+    "한국어는 줄 묶음의 문단 영역에 가로로 넣습니다. 영역에 안 들어가면 typeset-overflow로 검토가 되고, 편집기에서 고칩니다.",
+    "고품질 모드는 선택한 제공자에게만 페이지 이미지를 보냅니다. 응답은 검수 자료이고 정확성 증명이 아닙니다. 모델이 제안한 영역은 지우지 않습니다. 기본 모드는 이미지를 보내지 않습니다.",
     "OCR은 설치된 Tesseract, RapidOCR, EasyOCR의 품질에 따릅니다. GPU는 그 백엔드가 CUDA를 제공할 때만 씁니다.",
     "원본 파일과 orig/ 아래 추출 이미지는 다시 인코딩하지 않습니다. 만화 모드의 work PNG는 파생 이미지입니다.",
 ]
@@ -66,11 +72,14 @@ _REGION_ID = re.compile(r"p\d{4}r\d{2}")
 
 def image_job_key(file_hash: str, s: dict) -> str:
     dpi = str(int(s.get("dpi") or 0)) if s.get("input_kind") == "pdf" else "-"
-    sig = "|".join([
+    parts = [
         s.get("mode") or "", s.get("input_kind") or "", s.get("engine") or "", s.get("model") or "",
         s.get("src_lang") or "", s.get("tgt_lang") or "", dpi,
         "rtl" if s.get("rtl", True) else "ltr", s.get("ocr_backend") or "auto",
-    ])
+    ]
+    if s.get("manga_quality") == "hq":
+        parts.append("hq")
+    sig = "|".join(parts)
     return file_hash[:16] + "-" + hashlib.sha1(sig.encode()).hexdigest()[:8]
 
 
@@ -213,6 +222,12 @@ def _fail_page(jm, job_id, page, message: str):
     jm.db.event(job_id, "warn", f"{page['page_id']} 실패: {text[:200]}")
 
 
+def _can_erase(region, flags: list[str]) -> bool:
+    if float(region.get("confidence") or 0) < 0.55:
+        return False
+    return not any(flag in _ERASE_BLOCK for flag in flags)
+
+
 def _save_regions(jm, job_id, page, regions: list[dict]):
     page_id = page["page_id"]
     jm.db.x("DELETE FROM regions WHERE job_id=? AND page_id=?", (job_id, page_id))
@@ -227,25 +242,35 @@ def _save_regions(jm, job_id, page, regions: list[dict]):
         flags = list(region.get("flags") or [])
         review = 1 if region.get("review") or needs_review(region.get("confidence"), flags) else 0
         direction = region.get("direction") or "horizontal"
+        gid = region.get("group_id") or rid
         region_rows.append((
             job_id, rid, page_id, int(page["idx"]) * 10000 + local,
             int(region["x"]), int(region["y"]), int(region["w"]), int(region["h"]),
             direction, region.get("ocr_text") or "", None, float(region.get("confidence") or 0),
-            "gothic", None, "pending", json.dumps(flags, ensure_ascii=False), review, 0, now,
+            "gothic", None, "pending", json.dumps(flags, ensure_ascii=False), review, 0, now, gid,
         ))
-        text = (region.get("ocr_text") or "").strip()
-        if not text:
+    grouped: dict[str, list] = {}
+    group_order = []
+    for row in region_rows:
+        gid = row[-1]
+        if gid not in grouped:
+            group_order.append(gid)
+            grouped[gid] = []
+        grouped[gid].append(row)
+    for gid in group_order:
+        texts = [row[9].strip() for row in grouped[gid] if (row[9] or "").strip()]
+        if not texts:
             continue
-        prefix = "v" if direction == "vertical" else "h"
+        anchor = grouped[gid][0]
         block_rows.append({
-            "job_id": job_id, "block_id": rid, "idx": int(page["idx"]) * 10000 + local,
+            "job_id": job_id, "block_id": anchor[1], "idx": anchor[3],
             "file": "page:" + page_id, "chapter": f"p.{int(page['idx']) + 1}", "kind": "balloon",
-            "xpath": f"{prefix}:{int(region['x'])},{int(region['y'])},{int(region['w'])},{int(region['h'])}",
-            "source": text, "furigana": "{}",
+            "xpath": f"group:{gid}:{anchor[4]},{anchor[5]},{anchor[6]},{anchor[7]}",
+            "source": "\n".join(texts), "furigana": "{}",
         })
     jm.db.x(
         "INSERT INTO regions(job_id,region_id,page_id,idx,x,y,w,h,direction,ocr_text,translation,confidence,font,font_size,"
-        "status,flags,review,edited,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "status,flags,review,edited,updated,group_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         region_rows, many=True,
     )
     if block_rows:
@@ -474,7 +499,13 @@ def _typeset_page(jm, job_id, page, settings) -> dict:
         from PIL import Image
         with Image.open(path) as im:
             im.load()
-            boxes = [(r["x"], r["y"], r["w"], r["h"]) for r in regions]
+            boxes = []
+            for r in regions:
+                flags = json.loads(r.get("flags") or "[]")
+                boxes.append({
+                    "x": int(r["x"]), "y": int(r["y"]), "w": int(r["w"]), "h": int(r["h"]),
+                    "erase": _can_erase(r, flags),
+                })
             restored, notes = restore_regions(im, boxes)
         for region, note in zip(regions, notes):
             flags = json.loads(region.get("flags") or "[]")
@@ -496,25 +527,46 @@ def _typeset_page(jm, job_id, page, settings) -> dict:
         image_path = work_path
         media = "image/png"
         method = "inpaint-png"
+        grouped: dict[str, list] = {}
+        order = []
         for region in regions:
-            text = (region.get("translation") or "").strip()
+            gid = region.get("group_id") or region["region_id"]
+            if gid not in grouped:
+                order.append(gid)
+                grouped[gid] = []
+            grouped[gid].append(region)
+        for gid in order:
+            members = grouped[gid]
+            text = ""
+            anchor = members[0]
+            for member in members:
+                if (member.get("translation") or "").strip():
+                    text = member["translation"].strip()
+                    anchor = member
+                    break
             if not text:
                 continue
-            size = region.get("font_size")
-            tight = False
-            if not size:
-                size, tight = fit_font_size(text, int(region["w"]), int(region["h"]), region.get("direction") == "vertical")
-                jm.db.x("UPDATE regions SET font_size=? WHERE job_id=? AND region_id=?", (size, job_id, region["region_id"]))
-            if tight:
-                flags = json.loads(region.get("flags") or "[]")
-                if "typeset-tight" not in flags:
-                    flags.append("typeset-tight")
-                    jm.db.x("UPDATE regions SET flags=? WHERE job_id=? AND region_id=?",
-                            (json.dumps(flags, ensure_ascii=False), job_id, region["region_id"]))
+            x0 = min(int(m["x"]) for m in members)
+            y0 = min(int(m["y"]) for m in members)
+            x1 = max(int(m["x"]) + int(m["w"]) for m in members)
+            y1 = max(int(m["y"]) + int(m["h"]) for m in members)
+            laid = layout_korean_text(text, x1 - x0, y1 - y0, False)
+            size = float(anchor["font_size"]) if anchor.get("font_size") else laid["font_size"]
+            shown = laid["text"] if not anchor.get("font_size") else text
+            if not anchor.get("font_size"):
+                jm.db.x("UPDATE regions SET font_size=? WHERE job_id=? AND region_id=?", (size, job_id, anchor["region_id"]))
+            flags = json.loads(anchor.get("flags") or "[]")
+            if laid["overflow"] or size <= 10:
+                if "typeset-overflow" not in flags:
+                    flags.append("typeset-overflow")
+                jm.db.x(
+                    "UPDATE regions SET flags=?, review=1 WHERE job_id=? AND region_id=?",
+                    (json.dumps(flags, ensure_ascii=False), job_id, anchor["region_id"]),
+                )
             overlays.append({
-                "x": int(region["x"]), "y": int(region["y"]), "w": int(region["w"]), "h": int(region["h"]),
-                "text": text, "font": region.get("font") or "gothic", "font_size": float(size),
-                "direction": region.get("direction") or "horizontal",
+                "x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0,
+                "text": shown, "font": anchor.get("font") or "gothic", "font_size": float(size),
+                "direction": "horizontal",
             })
     return {"page_id": page["page_id"], "idx": page["idx"], "width": width, "height": height,
             "image_path": image_path, "media_type": media, "method": method, "overlays": overlays,
@@ -544,6 +596,13 @@ async def _finalize_image(jm, job_id, settings, retranslation=None):
             built[page["page_id"]] = item
 
     await _parallel(jm, job_id, settings, pages, worker)
+    hq_info = settings.get("_hq") or {}
+    if hq_info.get("applied_result"):
+        from .engines import make_engine
+        from .hq import post_typeset
+        engine = make_engine({**settings, "api_key": jm.secrets.get(job_id, "")})
+        await post_typeset(jm, job_id, engine, settings, built, hq_info)
+        settings["_hq"] = hq_info
     ordered = [built[p["page_id"]] for p in pages if p["page_id"] in built]
     real = [p for p in ordered if p.get("image_path")]
     if not real:
@@ -609,7 +668,9 @@ async def _finalize_image(jm, job_id, settings, retranslation=None):
         "quality": quality,
         "omission": omission,
         "failed_pages": failed_pages,
-        "inpaint": "heuristic-flat-fill-or-plate",
+        "inpaint": "text-mask-or-skip",
+        "hq": settings.get("_hq") or {"requested": False, "reason": "basic", "high_quality_verified": False,
+                                      "live_call": False, "ai_review_is_proof": False},
     }
     from .engines import price_for
     report = {
@@ -698,12 +759,23 @@ async def run_image_job(jm, job_id: str):
             if job_id in jm.cancel:
                 raise asyncio.CancelledError()
             _make_chunks(jm, job_id, settings)
+            hq_info = {"requested": False, "applied_result": False, "request_accepted": False, "live_call": False,
+                       "high_quality_verified": False, "image_use_proven": False, "ai_review_is_proof": False,
+                       "reason": "basic"}
+            engine = None
+            if settings.get("manga_quality") == "hq":
+                engine = make_engine({**settings, "api_key": jm.secrets.get(job_id, "")})
+                from .hq import run_hq
+                hq_info = await run_hq(jm, job_id, engine, settings)
+            settings["_hq"] = hq_info
             pending = db.q1("SELECT COUNT(*) n FROM blocks WHERE job_id=? AND kind='balloon' AND status NOT IN ('done','warn')", (job_id,))
             if pending and pending["n"]:
-                engine = make_engine({**settings, "api_key": jm.secrets.get(job_id, "")})
+                if engine is None:
+                    engine = make_engine({**settings, "api_key": jm.secrets.get(job_id, "")})
                 retranslation = await _translate_all(jm, job_id, engine, settings)
             else:
-                db.event(job_id, "warn", "번역할 대사가 없습니다. 이미지 EPUB만 만들고 검토가 필요합니다.")
+                if not db.q1("SELECT COUNT(*) n FROM regions WHERE job_id=?", (job_id,))["n"]:
+                    db.event(job_id, "warn", "번역할 대사가 없습니다. 이미지 EPUB만 만들고 검토가 필요합니다.")
                 _sync_regions_from_blocks(jm, job_id)
         await _finalize_image(jm, job_id, settings, retranslation)
     except RightsError as e:
@@ -740,8 +812,10 @@ def editor_state(jm, job_id: str) -> dict:
     )
     for region in regions:
         region["flags"] = json.loads(region.get("flags") or "[]")
+    hq = {"requested": settings.get("manga_quality") == "hq",
+          "note": "고품질을 켜면 선택한 모델에만 페이지 이미지를 보냅니다. 편집하면 그 페이지의 이미지 검수는 오래되어 다시 호출하지 않습니다."}
     return {"mode": settings.get("mode"), "pages": pages, "regions": regions,
-            "limits": LIMITS if settings.get("mode") == "comic" else []}
+            "limits": LIMITS if settings.get("mode") == "comic" else [], "hq": hq}
 
 
 def page_image_path(jm, job_id: str, page_id: str, variant: str) -> str:
@@ -811,7 +885,9 @@ def update_region(jm, job_id: str, region_id: str, fields: dict) -> dict:
              f"{prefix}:{x},{y},{w},{h}", ocr_text, translation, "{}",
              "done" if (translation or "").strip() else "pending", json.dumps(flags, ensure_ascii=False), time.time()),
         )
-    jm.db.event(job_id, "info", f"{region_id} 편집 저장")
+    from .hq import invalidate_page_review
+    invalidate_page_review(jm, job_id, region["page_id"])
+    jm.db.event(job_id, "info", f"{region_id} 편집 저장. 이 페이지의 이미지 검수는 오래되어 다시 호출하지 않습니다.")
     return jm.db.q1("SELECT * FROM regions WHERE job_id=? AND region_id=?", (job_id, region_id))
 
 

@@ -30,6 +30,8 @@ DPI는 300–600만 허용합니다. 결과 픽셀이 내부 상한(긴 변 2000
 
 GPU가 없으면 CPU로 실행합니다. `EPUB_OCR_GPU=cpu`면 GPU가 있어도 CPU만 씁니다.
 
+말풍선·글자 위치는 이 저장소의 CPU 휴리스틱입니다. 학습된 검출기(RT-DETR, YOLO)와 LaMa 같은 인페인트 가중치는 넣지 않습니다. 그 모델은 용량이 크고 라이선스가 따로라서, 참조한 다른 프로그램의 파일도 복사하지 않습니다. Tesseract `jpn`/`jpn_vert`가 CPU 기준선입니다.
+
 ### Tesseract (권장, 추가 Python 패키지 없음)
 
 - Windows: https://github.com/UB-Mannheim/tesseract/wiki 설치 후 일본어 언어 데이터(`jpn`, 세로쓰기 `jpn_vert`)를 추가합니다. `tesseract`가 PATH에 있어야 합니다.

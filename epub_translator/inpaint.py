@@ -1,25 +1,36 @@
-"""Background restoration for speech balloons.
+"""Background restoration for text lines.
 
-This is not generative inpainting. Flat balloon interiors lose dark strokes (the ink).
-Patterned or uneven areas are covered with one estimated color and flagged for review.
-The original file is never modified; callers pass a working copy.
+This is not generative inpainting. Only dark strokes inside a line box are replaced.
+Uneven areas and low-confidence boxes keep their original pixels.
+The caller's file is never modified; this function edits the image it is given.
 """
 from __future__ import annotations
 
 
-def restore_regions(image, boxes: list[tuple[int, int, int, int]]) -> tuple[object, list[dict]]:
+def restore_regions(image, boxes) -> tuple[object, list[dict]]:
+    """Erase only dark strokes inside a box. A dict with erase=False is left untouched."""
     from PIL import Image, ImageDraw
     base = image.convert("RGB")
     out = base.copy() if base is image else base
     notes = []
     for box in boxes:
-        notes.append(_restore_one(out, box, Image, ImageDraw))
+        if isinstance(box, dict):
+            rect = (int(box["x"]), int(box["y"]), int(box["w"]), int(box["h"]))
+            if box.get("erase") is False:
+                notes.append({
+                    "method": "skipped-review", "confident": False,
+                    "note": "확신이 낮거나 효과·배치가 불확실해 원본 픽셀을 유지했습니다.",
+                })
+                continue
+        else:
+            rect = tuple(int(v) for v in box)
+        notes.append(_restore_one(out, rect, Image, ImageDraw))
     return out, notes
 
 
 def _restore_one(image, box, Image, ImageDraw) -> dict:
     x, y, w, h = [int(v) for v in box]
-    inset = 3
+    inset = 1
     x1, y1 = x + inset, y + inset
     x2, y2 = x + w - inset, y + h - inset
     if x2 - x1 < 6 or y2 - y1 < 6:
@@ -45,15 +56,19 @@ def _restore_one(image, box, Image, ImageDraw) -> dict:
     mean = tuple(sum(p[c] for p in sample) / len(sample) for c in range(3))
     var = sum(sum((p[c] - mean[c]) ** 2 for c in range(3)) for p in sample) / len(sample)
     color = tuple(max(0, min(255, int(round(v)))) for v in mean)
-    if var > 900:
-        draw = ImageDraw.Draw(image)
-        draw.rectangle((x1, y1, x2 - 1, y2 - 1), fill=color)
-        return {"method": "flat-plate", "confident": False,
-                "note": "테두리 색이 고르지 않아 단색 플레이트로 가렸습니다. 생성형 인페인트가 아니며 무늬는 복원되지 않습니다."}
     luma = sum(color) / 3.0
     mask = crop.convert("L").point(lambda p, t=luma - 40: 255 if p < t else 0)
+    dark = mask.histogram()[255]
+    if dark > 0.45 * mask.size[0] * mask.size[1]:
+        return {"method": "skipped-uncertain", "confident": False,
+                "note": "어두운 부분이 글자 획보다 넓어 원본 픽셀을 유지했습니다."}
+    from PIL import ImageFilter
+    mask = mask.filter(ImageFilter.MaxFilter(3))
+    if mask.getextrema()[1] == 0:
+        return {"method": "text-mask-empty", "confident": True,
+                "note": "지울 획이 없어 원본 픽셀을 유지했습니다."}
     plate = Image.new("RGB", crop.size, color)
     cleaned = Image.composite(plate, crop, mask)
     image.paste(cleaned, (x1, y1))
-    return {"method": "flat-fill", "confident": True,
-            "note": "평탄한 말풍선 안의 어두운 획만 추정 배경색으로 바꾸었습니다. 그라데이션은 복원되지 않습니다."}
+    return {"method": "text-mask", "confident": True,
+            "note": "글자 마스크만 팽창해 주변 배경색으로 채웠습니다. 칸 전체를 칠하지 않습니다."}

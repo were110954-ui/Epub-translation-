@@ -48,7 +48,14 @@ textarea{min-height:52px}
   <div id="ocrBox" style="display:none"><label>OCR 백엔드</label>
    <select id="ocr_backend"><option value="auto">자동 (GPU 있으면 선택 백엔드, 없으면 Tesseract CPU)</option>
    <option value="tesseract">Tesseract (CPU)</option><option value="rapidocr">RapidOCR (선택 설치)</option><option value="easyocr">EasyOCR (선택 설치)</option></select>
-   <p class="muted">말풍선 검출·배경 복원·식자 크기는 휴리스틱입니다. 생성형 인페인트가 아니며, 불확실한 OCR/배치는 검토로 표시됩니다.</p>
+   <p class="muted" id="ocrstate">OCR 상태를 확인하는 중…</p>
+   <p class="muted">글자는 가로 한 줄·세로 한 열로 잡습니다. 칸 전체를 지우지 않고, 확신이 낮은 영역은 원본을 유지한 채 검토입니다. 학습된 검출 모델은 넣지 않았습니다.</p>
+   <label>만화 품질</label>
+   <select id="manga_quality"><option value="basic">기본 (CPU OCR + 텍스트 번역, 이미지를 보내지 않음)</option>
+    <option value="hq">고품질 (선택한 모델에 페이지 이미지를 보냄)</option></select>
+   <label class="chk"><input type="checkbox" id="image_input_ack"> 이 모델이 이미지를 받을 수 있고, 페이지 이미지가 그 제공자에게 전송되는 것을 확인합니다. 비용과 시간이 늘고, 다른 유료 모델·키로 자동 전환하지 않습니다. Mock이나 이미지를 거절한 모델은 고품질 성공이 아닙니다.</label>
+   <label class="chk"><input type="checkbox" id="hq_review" checked> 식자 뒤 이미지 검수 1회. 모델의 의견이며 정확성 증명이 아닙니다.</label>
+   <p class="muted">고품질은 화면에서 고른 엔진·모델·키만 사용합니다. 기본 모드는 이미지를 보내지 않습니다. 이름·말장난·효과음이 불확실하면 검토로 남기고, 모델이 제안한 상자는 지우지 않습니다.</p>
   </div>
  </div>
  <div class="card"><h2>2. AI 모델</h2>
@@ -91,7 +98,7 @@ textarea{min-height:52px}
   <div class="row" style="margin-top:8px"><button id="b_dl" onclick="dl()" disabled>⬇ EPUB 다운로드</button><button class="sec" id="b_rep" onclick="rep()" disabled>검수 보고서 (HTML)</button></div>
  </div>
  <div class="card" id="editor" style="display:none"><h2>만화 편집기</h2>
-  <p class="muted">왼쪽은 추출한 원본, 오른쪽은 식자용 이미지입니다. 말풍선을 끌어 옮기고 OCR/번역/글꼴을 고친 뒤 저장하면 EPUB을 다시 만듭니다. 번역 API를 다시 부르지 않습니다. 재번역은 해당 대사만 호출합니다.</p>
+  <p class="muted">왼쪽은 추출한 원본, 오른쪽은 식자용 이미지입니다. 말풍선을 끌어 옮기고 OCR/번역/글꼴을 고친 뒤 저장하면 EPUB을 다시 만듭니다. 번역 API를 다시 부르지 않습니다. 재번역은 해당 대사만 호출합니다. 대사나 위치를 고치면 그 페이지의 이미지 검수는 오래된 것으로 표시하고 다시 호출하지 않습니다.</p>
   <select id="edpick" onchange="PAGE=+this.value;drawPage()"></select>
   <div class="editor-grid" style="margin-top:8px">
    <div><div class="muted">원본</div><img id="ed_orig" alt="원본 페이지"></div>
@@ -111,7 +118,8 @@ const $=id=>document.getElementById(id);
 async function api(u,o){const r=await fetch(u,o);if(!r.ok){let t=await r.text();try{t=JSON.parse(t).detail}catch(e){}throw new Error(t)}
  const ct=r.headers.get('content-type')||'';if(ct.includes('json'))return r.json();return r.text()}
 function fd(o){const f=new FormData();for(const k in o)if(o[k]!==undefined&&o[k]!==null)f.append(k,o[k]);return f}
-async function loadCfg(){const c=await api('/api/config');window.CFG=c;$('keystate').textContent='저장된 키: '+Object.entries(c.keys).filter(([k,v])=>v).map(([k,v])=>k+' '+v).join(', ')||'없음';syncModel();}
+async function loadCfg(){const c=await api('/api/config');window.CFG=c;$('keystate').textContent='저장된 키: '+Object.entries(c.keys).filter(([k,v])=>v).map(([k,v])=>k+' '+v).join(', ')||'없음';syncModel();
+ try{const o=await api('/api/ocr-status');$('ocrstate').textContent=o.note;}catch(e){$('ocrstate').textContent='OCR 상태를 읽지 못했습니다.';}}
 function syncModel(){const e=$('engine').value;$('model').placeholder='기본: '+(window.CFG?CFG.default_models[e]:'');$('baseurlbox').style.display=e=='openai_compatible'?'block':'none'}
 $('engine').onchange=syncModel;
 $('file').onchange=syncMode;$('comic').onchange=syncMode;
@@ -137,7 +145,8 @@ async function analyze(auto){const f=$('file').files[0];if(!f)return alert('파�
  try{const r=await api('/api/jobs',{method:'POST',body:fd({file:f,engine:$('engine').value,model:$('model').value,api_key:$('api_key').value,base_url:$('base_url').value,
   temperature:$('temperature').value,concurrency:$('concurrency').value,chunk_size:$('chunk_size').value,src_lang:$('src').value,tgt_lang:$('tgt').value,
   drop_furigana:$('drop_furigana').checked,horizontal:$('horizontal').checked,autostart:!!auto,mode:MODE,dpi:$('dpi').value,
-  page_parallel:$('page_parallel').value,rtl:$('rtl').checked,rights_ack:true,ocr_backend:$('ocr_backend').value})});
+  page_parallel:$('page_parallel').value,rtl:$('rtl').checked,rights_ack:true,ocr_backend:$('ocr_backend').value,
+  manga_quality:$('manga_quality').value,image_input_ack:$('image_input_ack').checked,hq_review:$('hq_review').checked})});
   JOB=r.job_id;showEst(r.estimate);poll();listJobs()}catch(e){$('status').textContent='오류';alert(e.message)}}
 function showEst(e){if(!e)return;$('estimate').textContent=`예상: 블록 ${Number(e.blocks||0).toLocaleString()} · 청크 ${e.chunks} · 원문 ${Number(e.source_chars||0).toLocaleString()}자 · 토큰 약 ${Number(e.prompt_tokens||0).toLocaleString()} / ${Number(e.completion_tokens||0).toLocaleString()} · 비용 약 $${e.cost_usd} · ${e.note||''}`}
 async function act(a){if(!JOB)return;await api(`/api/jobs/${JOB}/${a}`,{method:'POST',body:fd(a=='start'?{api_key:$('api_key').value}:{})});poll()}

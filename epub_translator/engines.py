@@ -1,6 +1,11 @@
-"""LLM engines: OpenAI, OpenAI-compatible, Anthropic, Gemini, and a deterministic Mock engine (tests/offline)."""
+"""LLM engines: OpenAI, OpenAI-compatible, Anthropic, Gemini, and a deterministic Mock engine (tests/offline).
+
+Image parts follow each provider's documented chat request. A model name is not treated as proof
+that the model accepts images. Mock never reports a high-quality result.
+"""
 from __future__ import annotations
 import asyncio
+import base64
 import json
 import os
 import random
@@ -59,8 +64,48 @@ def price_for(model: str):
     return (1.0, 4.0)
 
 
+_VISION_MIME = {"image/jpeg", "image/png"}
+
+
+def _b64(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+def vision_parts_openai(user: str, images: list[tuple[str, bytes]]) -> list:
+    """OpenAI Chat Completions image input: text plus image_url data URLs. detail=low bounds tokens."""
+    parts: list = [{"type": "text", "text": user}]
+    for mime, raw in images:
+        if mime not in _VISION_MIME:
+            raise EngineError(f"unsupported image type {mime}", retryable=False)
+        parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{_b64(raw)}", "detail": "low"}})
+    return parts
+
+
+def vision_parts_anthropic(user: str, images: list[tuple[str, bytes]]) -> list:
+    """Anthropic Messages image blocks: base64 source, then the text block."""
+    parts = []
+    for mime, raw in images:
+        if mime not in _VISION_MIME:
+            raise EngineError(f"unsupported image type {mime}", retryable=False)
+        parts.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": _b64(raw)}})
+    parts.append({"type": "text", "text": user})
+    return parts
+
+
+def vision_parts_gemini(user: str, images: list[tuple[str, bytes]]) -> list:
+    """Gemini generateContent parts: inlineData (camelCase, as in the REST v1beta text path) then text."""
+    parts = []
+    for mime, raw in images:
+        if mime not in _VISION_MIME:
+            raise EngineError(f"unsupported image type {mime}", retryable=False)
+        parts.append({"inlineData": {"mimeType": mime, "data": _b64(raw)}})
+    parts.append({"text": user})
+    return parts
+
+
 class BaseEngine:
     name = "base"
+    offline = False
 
     def __init__(self, model: str, api_key: str = "", temperature: float = 0.3, base_url: str = "",
                  timeout: float = 300, max_output_tokens: int = 16384):
@@ -73,6 +118,12 @@ class BaseEngine:
 
     async def complete(self, system: str, user: str) -> EngineResult:
         raise NotImplementedError
+
+    async def complete_vision(self, system: str, user: str, images: list[tuple[str, bytes]]) -> EngineResult:
+        raise EngineError("이 엔진은 페이지 이미지를 보내는 경로가 없습니다.", retryable=False)
+
+    def _vision_tokens(self) -> int:
+        return max(256, min(4096, int(self.max_output_tokens)))
 
     async def _post(self, url, headers, payload):
         try:
@@ -112,6 +163,20 @@ class OpenAIEngine(BaseEngine):
         return EngineResult(ch["message"].get("content") or "", u.get("prompt_tokens", 0),
                             u.get("completion_tokens", 0), ch.get("finish_reason") == "length")
 
+    async def complete_vision(self, system, user, images):
+        # Vision calls do not force response_format. Some image models reject json_object mode.
+        url = (self.base_url or self.default_base).rstrip("/") + "/chat/completions"
+        payload = {"model": self.model, "temperature": self.temperature,
+                   "messages": [{"role": "system", "content": system},
+                                {"role": "user", "content": vision_parts_openai(user, images)}],
+                   "max_tokens": self._vision_tokens()}
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        d = await self._post(url, headers, payload)
+        ch = d["choices"][0]
+        u = d.get("usage", {}) or {}
+        return EngineResult(ch["message"].get("content") or "", u.get("prompt_tokens", 0),
+                            u.get("completion_tokens", 0), ch.get("finish_reason") == "length")
+
 
 class OpenAICompatEngine(OpenAIEngine):
     name = "openai_compatible"
@@ -131,6 +196,16 @@ class AnthropicEngine(BaseEngine):
         u = d.get("usage", {})
         return EngineResult(text, u.get("input_tokens", 0), u.get("output_tokens", 0), d.get("stop_reason") == "max_tokens")
 
+    async def complete_vision(self, system, user, images):
+        url = (self.base_url or "https://api.anthropic.com").rstrip("/") + "/v1/messages"
+        payload = {"model": self.model, "max_tokens": self._vision_tokens(), "temperature": self.temperature,
+                   "system": system, "messages": [{"role": "user", "content": vision_parts_anthropic(user, images)}]}
+        headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"}
+        d = await self._post(url, headers, payload)
+        text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+        u = d.get("usage", {})
+        return EngineResult(text, u.get("input_tokens", 0), u.get("output_tokens", 0), d.get("stop_reason") == "max_tokens")
+
 
 class GeminiEngine(BaseEngine):
     name = "gemini"
@@ -142,6 +217,29 @@ class GeminiEngine(BaseEngine):
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
             "generationConfig": {"temperature": self.temperature, "maxOutputTokens": self.max_output_tokens,
+                                 "responseMimeType": "application/json"},
+            "safetySettings": [{"category": c, "threshold": "BLOCK_NONE"} for c in (
+                "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")],
+        }
+        d = await self._post(url, {"x-goog-api-key": self.api_key}, payload)
+        cands = d.get("candidates") or []
+        if not cands:
+            raise EngineError(f"Gemini: no candidates ({json.dumps(d.get('promptFeedback', {}))[:200]})")
+        c = cands[0]
+        text = "".join(p.get("text", "") for p in c.get("content", {}).get("parts", []) if not p.get("thought"))
+        u = d.get("usageMetadata", {})
+        return EngineResult(text, u.get("promptTokenCount", 0),
+                            u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0),
+                            c.get("finishReason") == "MAX_TOKENS")
+
+    async def complete_vision(self, system, user, images):
+        base = (self.base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+        url = f"{base}/models/{self.model}:generateContent"
+        payload = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": vision_parts_gemini(user, images)}],
+            "generationConfig": {"temperature": self.temperature, "maxOutputTokens": self._vision_tokens(),
                                  "responseMimeType": "application/json"},
             "safetySettings": [{"category": c, "threshold": "BLOCK_NONE"} for c in (
                 "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
@@ -232,6 +330,16 @@ class MockEngine(BaseEngine):
                 "characters": []}
         text = json.dumps(resp, ensure_ascii=False)
         return EngineResult(text, len(system + user) // 2, len(text) // 2, False)
+
+    async def complete_vision(self, system, user, images):
+        if os.environ.get("MOCK_VISION") != "1":
+            raise EngineError("mock 엔진은 페이지 이미지를 보지 않습니다. 고품질 성공으로 표시하지 않습니다.", retryable=False)
+        return EngineResult(json.dumps({
+            "quality": "mock",
+            "readings": [], "groups": [], "translations": [], "proposed": [],
+            "summary": "mock vision",
+            "review": {"issues": [], "opinion": "mock opinion, not a proof"},
+        }, ensure_ascii=False), 1, 1, False)
 
 
 ENGINES = {"openai": OpenAIEngine, "openai_compatible": OpenAICompatEngine, "anthropic": AnthropicEngine,
