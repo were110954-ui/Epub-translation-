@@ -104,6 +104,8 @@ def test_dropcap_leadin_merged_and_korean_css():
     assert markup == "<t1>Having anguished and languished till I could.</t1>"
     assert "kt-leadin" in p.get("class")
     c = korean_css("p{text-align: justify; line-height: 120%; font-variant: small-caps; letter-spacing: 0.2mm; text-indent: 2.54em; font-family: Georgia, serif}")
-    assert "justify" not in c and "line-height: 1.8" in c and "small-caps" not in c and "letter-spacing: normal" in c
-    assert "text-indent: 1em" in c and "Noto Serif KR" in c
-    assert "line-height: 1.75" in korean_css("p{line-height: 1.75}")
+    assert "justify" not in c and "line-height: 1.65" in c and "small-caps" not in c and "letter-spacing: normal" in c
+    assert "text-indent: 1em" in c and "Noto Serif KR" in c and "Malgun Gothic" not in c
+    assert "line-height: 1.65" in korean_css("p{line-height: 1.75}")
+    h = korean_css("h1{font-size: 1.4em; font-weight: bold; line-height: 1.2}")
+    assert "font-size: 1.4em" in h and "font-weight: bold" in h and "line-height: 1.2" in h

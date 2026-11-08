@@ -5,10 +5,10 @@
 :root{--b:#2563eb;--bg:#f6f7fb;--c:#fff;--t:#1f2937;--m:#6b7280}
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,'Malgun Gothic','Apple SD Gothic Neo',sans-serif;background:var(--bg);color:var(--t)}
 header{background:#111827;color:#fff;padding:14px 24px}header h1{margin:0;font-size:20px}header small{color:#9ca3af}
-main{max-width:1150px;margin:20px auto;padding:0 16px;display:grid;grid-template-columns:380px 1fr;gap:16px}
+main{max-width:1200px;margin:20px auto;padding:0 16px;display:grid;grid-template-columns:380px 1fr;gap:16px}
 .card{background:var(--c);border-radius:12px;padding:16px;box-shadow:0 1px 3px #0001;margin-bottom:16px}
 h2{font-size:15px;margin:0 0 10px}label{display:block;font-size:12px;color:var(--m);margin:8px 0 3px}
-input,select{width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:7px;font-size:14px}
+input,select,textarea{width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:7px;font-size:14px}
 .row{display:flex;gap:8px}.row>*{flex:1}
 button{background:var(--b);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}
 button.sec{background:#e5e7eb;color:#111}button.red{background:#dc2626}button:disabled{opacity:.5;cursor:default}
@@ -19,14 +19,37 @@ button.sec{background:#e5e7eb;color:#111}button.red{background:#dc2626}button:di
 .warn{color:#fbbf24}.error{color:#f87171}table{width:100%;border-collapse:collapse;font-size:12px}td,th{border-bottom:1px solid #eee;padding:4px;text-align:left}
 .chip{display:inline-block;padding:2px 8px;border-radius:10px;background:#e0e7ff;font-size:12px}.muted{color:var(--m);font-size:12px}
 .chk{display:flex;align-items:center;gap:6px;font-size:13px;margin-top:8px}.chk input{width:auto}
+.editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stage{position:relative;display:inline-block;max-width:100%}
+.stage img{max-width:100%;height:auto;display:block}
+.bbox{position:absolute;border:2px solid #2563eb;background:rgba(255,255,255,.55);color:#111;font-size:11px;overflow:hidden;cursor:move;box-sizing:border-box}
+.bbox.rev{border-color:#d97706}
+.reg{border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin-top:8px}
+.reg.rev{border-color:#f59e0b}
+textarea{min-height:52px}
 </style></head><body>
-<header><h1>📖 EPUB AI Translator</h1><small>일본어 전자책 → 한국어 · 구조/서식 보존 · 이어하기 지원 · DRM 파일은 처리하지 않습니다</small></header>
+<header><h1>📖 EPUB AI Translator</h1>
+<small>EPUB 소설 번역 · CBZ → 고정 레이아웃 EPUB · PDF/CBZ 만화 번역 · 번역 없는 PDF 변환은 없음 · DRM은 처리하지 않습니다</small></header>
 <main>
 <section>
- <div class="card"><h2>1. EPUB 업로드</h2>
-  <input type="file" id="file" accept=".epub">
+ <div class="card"><h2>1. 파일</h2>
+  <input type="file" id="file" accept=".epub,.pdf,.cbz,.zip">
+  <div id="modeLabel" class="muted">EPUB은 소설 번역, CBZ는 변환입니다. PDF는 만화 번역을 켠 경우에만 처리합니다.</div>
+  <p id="pdfNote" class="muted" style="display:none">PDF는 리더에서 그대로 볼 수 있어, 번역 없이 EPUB으로만 바꾸는 기능은 없습니다. 아래 만화 번역을 켜야 이 PDF를 올리며, 켜기 전에는 번역 API를 호출하지 않습니다.</p>
+  <label class="chk" id="comicBox" style="display:none"><input type="checkbox" id="comic"> 만화 AI 번역·식자 (PDF 또는 CBZ)</label>
   <div class="row"><div><label>원본 언어</label><select id="src"><option value="ja">일본어</option><option value="en">영어</option><option value="zh">중국어</option></select></div>
   <div><label>번역 언어</label><select id="tgt"><option value="ko">한국어</option></select></div></div>
+  <div id="dpiBox" style="display:none">
+   <label>렌더 DPI (300–600). 페이지가 임베디드 이미지 한 장이면 원본 바이트를 그대로 쓰고, 그렇지 않을 때만 렌더합니다.</label>
+   <input id="dpi" type="number" min="300" max="600" value="300">
+  </div>
+  <div class="row"><div><label>페이지 병렬 (1–4)</label><input id="page_parallel" type="number" min="1" max="4" value="2"></div>
+  <div><label class="chk"><input type="checkbox" id="rtl" checked> 만화 우→좌 (RTL)</label></div></div>
+  <div id="ocrBox" style="display:none"><label>OCR 백엔드</label>
+   <select id="ocr_backend"><option value="auto">자동 (GPU 있으면 선택 백엔드, 없으면 Tesseract CPU)</option>
+   <option value="tesseract">Tesseract (CPU)</option><option value="rapidocr">RapidOCR (선택 설치)</option><option value="easyocr">EasyOCR (선택 설치)</option></select>
+   <p class="muted">말풍선 검출·배경 복원·식자 크기는 휴리스틱입니다. 생성형 인페인트가 아니며, 불확실한 OCR/배치는 검토로 표시됩니다.</p>
+  </div>
  </div>
  <div class="card"><h2>2. AI 모델</h2>
   <label>엔진</label><select id="engine">
@@ -41,28 +64,41 @@ button.sec{background:#e5e7eb;color:#111}button.red{background:#dc2626}button:di
    <input id="keyval" type="password" placeholder="값 (비우면 삭제)"><button class="sec" onclick="saveKey()" style="margin-top:6px">저장</button></details>
  </div>
  <div class="card"><h2>3. 번역 품질 설정</h2>
+  <div id="novelOpts">
   <div class="row"><div><label>Temperature</label><input id="temperature" type="number" step="0.1" min="0" max="1.5" value="0.3"></div>
   <div><label>동시 요청 수</label><input id="concurrency" type="number" min="1" max="32" value="4"></div></div>
   <label>청크 크기 (문자, 의미 단위로 조정됨)</label><input id="chunk_size" type="number" min="300" max="20000" value="2500">
   <label class="chk"><input type="checkbox" id="drop_furigana" checked> 읽기용 후리가나 정리 (의미 있는 루비는 유지)</label>
   <label class="chk"><input type="checkbox" id="horizontal" checked> 세로쓰기 → 가로쓰기 변환</label>
-  <div style="margin-top:12px" class="row"><button onclick="analyze()">분석 + 비용 추정</button><button onclick="analyze(true)">바로 번역 시작</button></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="rights"> 이 파일을 번역·변환할 적법한 권한이 있습니다. 저작권이 없는 파일은 올리지 마세요.</label>
+  <div style="margin-top:12px" class="row"><button onclick="analyze()">분석 + 비용 추정</button><button onclick="analyze(true)">바로 시작</button></div>
  </div>
  <div class="card"><h2>작업 목록</h2><div id="jobs" class="muted">-</div></div>
 </section>
 <section>
- <div class="card"><h2>진행 상황 <span class="chip" id="status">대기</span></h2>
+ <div class="card"><h2>진행 상황 <span class="chip" id="status">대기</span> <span class="chip" id="modeChip">-</span></h2>
   <div id="title" class="muted">파일을 업로드하세요.</div>
   <div class="bar" style="margin-top:10px"><div id="bar" style="width:0%"></div></div>
-  <div class="muted" id="ptext">0 / 0 블록 (0%) — 실제 처리 완료된 텍스트 블록 기준</div>
+  <div class="muted" id="ptext">0 / 0 블록 (0%)</div>
   <div class="stats">
    <div class="stat"><b id="s_done">0</b><span>완료 블록</span></div><div class="stat"><b id="s_fail">0</b><span>실패/재시도 대기</span></div>
    <div class="stat"><b id="s_calls">0</b><span>API 호출 / 재시도</span></div><div class="stat"><b id="s_tok">0</b><span>토큰 (입력/출력)</span></div></div>
-  <div>현재 장: <b id="chapter">-</b></div>
+  <div>현재 단계: <b id="chapter">-</b></div>
   <div id="estimate" class="muted" style="margin:8px 0"></div>
   <div class="row" style="margin-top:8px"><button id="b_start" onclick="act('start')" disabled>시작</button><button class="sec" id="b_pause" onclick="act('pause')" disabled>일시정지</button>
    <button class="sec" id="b_resume" onclick="act('resume')" disabled>재개/이어하기</button><button class="red" id="b_cancel" onclick="act('cancel')" disabled>취소</button></div>
-  <div class="row" style="margin-top:8px"><button id="b_dl" onclick="dl()" disabled>⬇ 번역 EPUB 다운로드</button><button class="sec" id="b_rep" onclick="rep()" disabled>검수 보고서 (HTML)</button></div>
+  <div class="row" style="margin-top:8px"><button id="b_dl" onclick="dl()" disabled>⬇ EPUB 다운로드</button><button class="sec" id="b_rep" onclick="rep()" disabled>검수 보고서 (HTML)</button></div>
+ </div>
+ <div class="card" id="editor" style="display:none"><h2>만화 편집기</h2>
+  <p class="muted">왼쪽은 추출한 원본, 오른쪽은 식자용 이미지입니다. 말풍선을 끌어 옮기고 OCR/번역/글꼴을 고친 뒤 저장하면 EPUB을 다시 만듭니다. 번역 API를 다시 부르지 않습니다. 재번역은 해당 대사만 호출합니다.</p>
+  <select id="edpick" onchange="PAGE=+this.value;drawPage()"></select>
+  <div class="editor-grid" style="margin-top:8px">
+   <div><div class="muted">원본</div><img id="ed_orig" alt="원본 페이지"></div>
+   <div><div class="muted">번역·식자</div><div class="stage" id="ed_stage"><img id="ed_work" alt="작업 페이지"></div></div>
+  </div>
+  <div id="ed_list"></div>
+  <button style="margin-top:8px" onclick="saveEditor()">편집 저장 후 EPUB 다시 만들기</button>
  </div>
  <div class="card"><h2>로그 (실패 및 재시도)</h2><div id="events"></div></div>
  <div class="card"><h2>장별 진행</h2><table id="chapters"></table></div>
@@ -70,37 +106,108 @@ button.sec{background:#e5e7eb;color:#111}button.red{background:#dc2626}button:di
   <table id="gloss"></table></div>
 </section></main>
 <script>
-let JOB=null,timer=null;const $=id=>document.getElementById(id);
-async function api(u,o){const r=await fetch(u,o);if(!r.ok){let t=await r.text();try{t=JSON.parse(t).detail}catch(e){}throw new Error(t)}return r.json()}
-function fd(o){const f=new FormData();for(const k in o)f.append(k,o[k]);return f}
+let JOB=null,timer=null,MODE='epub',KIND='epub',ED=null,PAGE=0,LAST=null;
+const $=id=>document.getElementById(id);
+async function api(u,o){const r=await fetch(u,o);if(!r.ok){let t=await r.text();try{t=JSON.parse(t).detail}catch(e){}throw new Error(t)}
+ const ct=r.headers.get('content-type')||'';if(ct.includes('json'))return r.json();return r.text()}
+function fd(o){const f=new FormData();for(const k in o)if(o[k]!==undefined&&o[k]!==null)f.append(k,o[k]);return f}
 async function loadCfg(){const c=await api('/api/config');window.CFG=c;$('keystate').textContent='저장된 키: '+Object.entries(c.keys).filter(([k,v])=>v).map(([k,v])=>k+' '+v).join(', ')||'없음';syncModel();}
 function syncModel(){const e=$('engine').value;$('model').placeholder='기본: '+(window.CFG?CFG.default_models[e]:'');$('baseurlbox').style.display=e=='openai_compatible'?'block':'none'}
 $('engine').onchange=syncModel;
+$('file').onchange=syncMode;$('comic').onchange=syncMode;
+function syncMode(){const f=$('file').files[0];const name=(f?f.name:'').toLowerCase();
+ KIND=name.endsWith('.pdf')?'pdf':(name.endsWith('.cbz')||name.endsWith('.zip')?'cbz':'epub');
+ const comic=$('comic').checked&&KIND!=='epub';
+ MODE=(KIND==='pdf'&&!comic)?'':(comic?'comic':KIND);
+ const labels={epub:'EPUB 소설 번역','':'PDF는 만화 번역만',cbz:'CBZ → EPUB3 고정 레이아웃',comic:'만화 AI 번역·식자'};
+ const shown=KIND==='pdf'&&!comic?'PDF: 변환만 하는 모드는 없습니다. 만화 번역을 켜세요.':('선택된 모드: '+(labels[MODE]||MODE));
+ $('modeLabel').textContent=shown+(f?' · '+f.name:'');
+ $('modeChip').textContent=labels[MODE]||MODE||'-';
+ $('pdfNote').style.display=KIND==='pdf'?'block':'none';
+ $('dpiBox').style.display=(KIND==='pdf'&&comic)?'block':'none';
+ $('comicBox').style.display=KIND==='epub'?'none':'flex';
+ $('ocrBox').style.display=MODE==='comic'?'block':'none';
+ $('novelOpts').style.display=KIND==='epub'?'block':'none';}
 async function saveKey(){await api('/api/keys',{method:'POST',body:fd({name:$('keyname').value,value:$('keyval').value})});$('keyval').value='';loadCfg()}
-async function analyze(auto){const f=$('file').files[0];if(!f)return alert('EPUB 파일을 선택하세요');$('status').textContent='분석 중…';
+async function analyze(auto){const f=$('file').files[0];if(!f)return alert('파일을 선택하세요');
+ if(KIND==='pdf'&&!$('comic').checked)return alert('PDF를 EPUB으로만 바꾸지는 않습니다. 리더에서 그대로 열 수 있습니다. 만화 AI 번역을 켠 뒤에만 분석합니다. 지금은 번역 API를 호출하지 않습니다.');
+ if(!MODE)return alert('처리할 모드가 없습니다.');
+ if(!$('rights').checked)return alert('적법한 번역·변환 권한을 확인해야 합니다.');
+ $('status').textContent='분석 중…';
  try{const r=await api('/api/jobs',{method:'POST',body:fd({file:f,engine:$('engine').value,model:$('model').value,api_key:$('api_key').value,base_url:$('base_url').value,
   temperature:$('temperature').value,concurrency:$('concurrency').value,chunk_size:$('chunk_size').value,src_lang:$('src').value,tgt_lang:$('tgt').value,
-  drop_furigana:$('drop_furigana').checked,horizontal:$('horizontal').checked,autostart:!!auto})});
+  drop_furigana:$('drop_furigana').checked,horizontal:$('horizontal').checked,autostart:!!auto,mode:MODE,dpi:$('dpi').value,
+  page_parallel:$('page_parallel').value,rtl:$('rtl').checked,rights_ack:true,ocr_backend:$('ocr_backend').value})});
   JOB=r.job_id;showEst(r.estimate);poll();listJobs()}catch(e){$('status').textContent='오류';alert(e.message)}}
-function showEst(e){$('estimate').innerHTML=`예상: 블록 ${e.blocks.toLocaleString()} · 청크 ${e.chunks} · 원문 ${e.source_chars.toLocaleString()}자 · 토큰 약 ${e.prompt_tokens.toLocaleString()} / ${e.completion_tokens.toLocaleString()} · 비용 약 $${e.cost_usd} <span title="${e.note}">ⓘ</span>`}
+function showEst(e){if(!e)return;$('estimate').textContent=`예상: 블록 ${Number(e.blocks||0).toLocaleString()} · 청크 ${e.chunks} · 원문 ${Number(e.source_chars||0).toLocaleString()}자 · 토큰 약 ${Number(e.prompt_tokens||0).toLocaleString()} / ${Number(e.completion_tokens||0).toLocaleString()} · 비용 약 $${e.cost_usd} · ${e.note||''}`}
 async function act(a){if(!JOB)return;await api(`/api/jobs/${JOB}/${a}`,{method:'POST',body:fd(a=='start'?{api_key:$('api_key').value}:{})});poll()}
 function dl(){location.href=`/api/jobs/${JOB}/download`}function rep(){window.open(`/api/jobs/${JOB}/report.html`)}
-async function poll(){clearTimeout(timer);if(!JOB)return;try{const s=await api('/api/jobs/'+JOB);render(s);
+async function poll(){clearTimeout(timer);if(!JOB)return;try{const s=await api('/api/jobs/'+JOB);LAST=s;render(s);
  if(s.running||['running','building'].includes(s.status))timer=setTimeout(poll,1000);else timer=setTimeout(poll,5000)}catch(e){timer=setTimeout(poll,3000)}}
 function esc(s){return (s??'').toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function render(s){$('status').textContent=s.status+(s.running?' ●':'');$('title').textContent=`${s.title||''} — ${s.file_name} (${s.settings.engine}/${s.settings.model})`;
- $('bar').style.width=s.progress+'%';$('ptext').textContent=`${s.done_blocks} / ${s.total_blocks} 블록 (${s.progress}%) — 실제 처리 완료된 텍스트 블록 기준`;
- const c=s.counts;$('s_done').textContent=s.done_blocks;$('s_fail').textContent=(c.failed||0)+' / '+(c.retry||0);
+function render(s){const mode=s.settings.mode||'epub';
+ $('status').textContent=s.status+(s.running?' ●':'');
+ $('modeChip').textContent={epub:'EPUB 소설',pdf:'PDF 변환(중단)',cbz:'CBZ→EPUB',comic:'만화 번역'}[mode]||mode;
+ $('title').textContent=`${s.title||''} — ${s.file_name} (${s.settings.engine}/${s.settings.model})`;
+ $('bar').style.width=s.progress+'%';
+ let pages='';
+ if(s.page_progress&&s.page_progress.total)pages=` · 페이지 ${s.page_progress.done}/${s.page_progress.total} (실패 ${s.page_progress.failed})`;
+ if(s.review_count)pages+=` · 검토 ${s.review_count}`;
+ $('ptext').textContent=`${s.done_blocks} / ${s.total_blocks} 블록 (${s.progress}%)${pages}`;
+ const c=s.counts||{};$('s_done').textContent=s.done_blocks;$('s_fail').textContent=(c.failed||0)+' / '+(c.retry||0);
  $('s_calls').textContent=s.api_calls+' / '+s.retries;$('s_tok').textContent=(s.prompt_tokens/1000).toFixed(1)+'k / '+(s.completion_tokens/1000).toFixed(1)+'k';
  $('chapter').textContent=s.current_chapter||'-';
  $('events').innerHTML=s.events.map(e=>`<div class="${e.level}">${new Date(e.ts*1000).toLocaleTimeString()} [${e.level}] ${esc(e.message)}</div>`).join('');
- $('chapters').innerHTML='<tr><th>장</th><th>완료</th></tr>'+s.chapters.map(x=>`<tr><td>${esc(x.chapter)}</td><td>${x.d||0}/${x.n}</td></tr>`).join('');
+ $('chapters').innerHTML='<tr><th>장</th><th>완료</th></tr>'+(s.chapters||[]).map(x=>`<tr><td>${esc(x.chapter)}</td><td>${x.d||0}/${x.n}</td></tr>`).join('');
  $('b_start').disabled=s.running;$('b_pause').disabled=!s.running||s.status=='paused';$('b_resume').disabled=s.running&&s.status!='paused';$('b_cancel').disabled=!s.running;
- const fin=s.status.startsWith('completed');$('b_dl').disabled=!fin;$('b_rep').disabled=!fin;loadGloss()}
+ const fin=(s.status||'').startsWith('completed');$('b_dl').disabled=!fin;$('b_rep').disabled=!fin;
+ if(mode==='comic')loadEditor();else $('editor').style.display='none';
+ loadGloss()}
 async function loadGloss(){if(!JOB)return;const g=await api(`/api/jobs/${JOB}/glossary`);
  $('gloss').innerHTML='<tr><th>원어</th><th>번역</th><th>종류</th></tr>'+g.glossary.slice(0,300).map(x=>`<tr><td>${esc(x.source)}</td><td>${esc(x.target)}</td><td>${esc(x.type)}${x.locked?' 🔒':''}</td></tr>`).join('')+
  (g.characters.length?'<tr><th colspan=3>인물</th></tr>'+g.characters.map(x=>`<tr><td>${esc(x.name)} / ${esc(x.korean)}</td><td colspan=2>${esc(x.speech)} · ${esc(x.honorifics)}</td></tr>`).join(''):'')}
 async function addTerm(){if(!JOB)return;await api(`/api/jobs/${JOB}/glossary`,{method:'POST',body:fd({source:$('g_src').value,target:$('g_tgt').value})});loadGloss()}
 async function listJobs(){const j=await api('/api/jobs');$('jobs').innerHTML=j.map(x=>`<div><a href="#" onclick="JOB='${x.job_id}';poll();return false">${esc(x.title||x.file_name)}</a> <span class="chip">${x.status}</span> ${x.done_blocks}/${x.total_blocks}</div>`).join('')||'-'}
-loadCfg();listJobs();
+async function loadEditor(){if(!JOB)return;$('editor').style.display='block';
+ try{ED=await api(`/api/jobs/${JOB}/editor`);}catch(e){return}
+ if(!ED.pages.length){$('edpick').innerHTML='';$('ed_list').textContent='페이지가 없습니다.';return}
+ if(PAGE>=ED.pages.length)PAGE=0;
+ $('edpick').innerHTML=ED.pages.map((p,i)=>`<option value="${i}"${i===PAGE?' selected':''}>${p.page_id} ${p.stage}${p.error?' !':''}</option>`).join('');
+ drawPage()}
+function drawPage(){if(!ED)return;const p=ED.pages[PAGE];const base=`/api/jobs/${JOB}/pages/${p.page_id}/image`;
+ $('ed_orig').src=base+'?variant=original&t='+Date.now();
+ const work=$('ed_work');work.onerror=()=>{work.onerror=null;work.src=base+'?variant=original&t='+Date.now();};
+ work.src=base+'?variant=work&t='+Date.now();
+ const regs=ED.regions.filter(r=>r.page_id===p.page_id);
+ $('ed_list').innerHTML=regs.map(r=>`<div class="reg${r.review?' rev':''}" data-id="${r.region_id}"><b>${r.region_id}</b> ${esc(r.direction)} · 신뢰 ${r.confidence??''} · ${esc((r.flags||[]).join(', '))}
+  <label>OCR</label><textarea data-k="ocr_text">${esc(r.ocr_text||'')}</textarea>
+  <label>번역</label><textarea data-k="translation">${esc(r.translation||'')}</textarea>
+  <div class="row"><select data-k="font"><option value="gothic">고딕</option><option value="serif">명조</option><option value="sans">산세리프</option></select>
+  <input data-k="font_size" type="number" min="8" max="72" value="${r.font_size||16}"></div>
+  <button class="sec" type="button" onclick="retranslate('${r.region_id}')">이 대사만 재번역</button></div>`).join('')||'<p class="muted">검출된 대사가 없습니다. 검출은 휴리스틱이라 복잡한 페이지는 비어 있을 수 있습니다.</p>';
+ regs.forEach(r=>{const box=document.querySelector(`.reg[data-id="${r.region_id}"] [data-k=font]`);if(box)box.value=r.font||'gothic';});
+ const place=()=>{
+  $('ed_stage').querySelectorAll('.bbox').forEach(n=>n.remove());
+  const scale=(work.clientWidth&&work.naturalWidth)?work.clientWidth/work.naturalWidth:1;
+  regs.forEach(r=>{const d=document.createElement('div');d.className='bbox'+(r.review?' rev':'');
+   d.style.left=(r.x*scale)+'px';d.style.top=(r.y*scale)+'px';d.style.width=Math.max(8,r.w*scale)+'px';d.style.height=Math.max(8,r.h*scale)+'px';
+   d.textContent=r.translation||r.ocr_text||'';
+   d.addEventListener('mousedown',ev=>startDrag(ev,d,r,scale));
+   $('ed_stage').appendChild(d);});
+ };
+ if(work.complete&&work.naturalWidth)place();else work.onload=place;}
+function startDrag(ev,el,r,scale){ev.preventDefault();const sx=ev.clientX,sy=ev.clientY,ox=r.x,oy=r.y;
+ function move(e){r.x=Math.round(ox+(e.clientX-sx)/scale);r.y=Math.round(oy+(e.clientY-sy)/scale);el.style.left=(r.x*scale)+'px';el.style.top=(r.y*scale)+'px';}
+ function up(){window.removeEventListener('mousemove',move);window.removeEventListener('mouseup',up);}
+ window.addEventListener('mousemove',move);window.addEventListener('mouseup',up);}
+async function saveEditor(){if(!ED)return;const p=ED.pages[PAGE];const regs=ED.regions.filter(r=>r.page_id===p.page_id);
+ for(const r of regs){const box=document.querySelector(`.reg[data-id="${r.region_id}"]`);
+  await api(`/api/jobs/${JOB}/regions/${r.region_id}`,{method:'POST',body:fd({ocr_text:box.querySelector('[data-k=ocr_text]').value,
+   translation:box.querySelector('[data-k=translation]').value,font:box.querySelector('[data-k=font]').value,
+   font_size:box.querySelector('[data-k=font_size]').value,x:r.x,y:r.y,w:r.w,h:r.h})});}
+ await api(`/api/jobs/${JOB}/rebuild`,{method:'POST'});alert('저장하고 EPUB을 다시 만들었습니다.');poll()}
+async function retranslate(id){const box=document.querySelector(`.reg[data-id="${id}"]`);
+ if(box)await api(`/api/jobs/${JOB}/regions/${id}`,{method:'POST',body:fd({ocr_text:box.querySelector('[data-k=ocr_text]').value})});
+ await api(`/api/jobs/${JOB}/regions/${id}/retranslate`,{method:'POST'});await loadEditor()}
+loadCfg();listJobs();syncMode();
 </script></body></html>
