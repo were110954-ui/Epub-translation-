@@ -59,7 +59,7 @@ python -m epub_translator translate 책.pdf --mode comic --engine gemini --right
 
 OCR·PDF 렌더의 선택 설치는 `docs/OPTIONAL_DEPS.md`. 소설만 쓸 때는 `requirements.txt`만 설치하면 됩니다.
 
-만화 편집기는 완료된 만화 작업에서 원본/번역을 나란히 보여주고, 대사·OCR·글꼴·위치를 저장한 뒤 EPUB만 다시 만듭니다. 검출은 밝은 말풍선과 글자 획의 CPU 휴리스틱이고, 배경 복원은 글자 마스크 또는 단색 플레이트입니다. 학습된 검출 모델은 넣지 않았습니다. 빈 OCR, 방향이 갈리는 글자, 영역 밖 글자, 넘치는 한국어는 성공이 아니라 검토입니다. 화면의 OCR 상태 문구는 설치된 백엔드를 그대로 보여 줍니다.
+만화 편집기는 완료된 만화 작업에서 원본/번역을 나란히 보여주고, 대사·OCR·글꼴·위치를 저장한 뒤 EPUB만 다시 만듭니다. 검출은 가로 한 줄 또는 세로 한 열이고, 지우는 것도 그 줄의 획만입니다. 확신이 낮으면 원본을 그대로 두고 검토로 남깁니다. 이웃한 줄은 번역 문맥으로 묶고, 한국어는 그 묶음의 영역에 가로로 넣습니다. 학습된 검출 모델은 넣지 않았습니다.
 
 주요 옵션: `--model`, `--temperature`(기본 0.3), `--concurrency`(동시 요청, 기본 4), `--chunk-size`(문자, 기본 2500),
 `--max-output-tokens`, `--max-retries`, `--keep-furigana`(후리가나 모두 유지), `--keep-vertical`(세로쓰기 유지), `--no-epubcheck`.

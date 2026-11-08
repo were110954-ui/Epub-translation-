@@ -1,9 +1,9 @@
-"""Japanese OCR adapters and balloon detection.
+"""Japanese OCR adapters.
 
-Detection is a CPU heuristic (bright regions closed off from the page edge). It is not a
-segmentation model. Text recognition uses an installed backend only: Tesseract, RapidOCR, or
-EasyOCR. There is no fake recognizer in the default path. Tests pass a fixture backend that
-reads text embedded in the PNG and is labeled as not real OCR.
+Text boxes come from text_lines: one horizontal line or one vertical column, not a panel.
+Recognition uses an installed backend only: Tesseract, RapidOCR, or EasyOCR. There is no
+fake recognizer in the default path. Tests pass a fixture backend that reads text embedded
+in the PNG and is labeled as not real OCR.
 """
 from __future__ import annotations
 import importlib.util
@@ -18,7 +18,7 @@ from .safety import OcrUnavailable
 REVIEW_FLAGS = {
     "placement-uncertain", "ocr-empty", "low-confidence", "inpaint-flat-plate",
     "ocr-failed", "ocr-backend-error", "typeset-overflow", "outside-balloon",
-    "direction-uncertain",
+    "direction-uncertain", "effect-uncertain", "furigana-uncertain",
 }
 
 
@@ -150,191 +150,10 @@ def _cc_boxes(mask: bytearray, width: int, height: int, min_area: int) -> list[d
     return boxes
 
 
-def _gap(a, b, axis: str) -> int:
-    if axis == "x":
-        if a["x"] + a["w"] < b["x"]:
-            return b["x"] - (a["x"] + a["w"])
-        if b["x"] + b["w"] < a["x"]:
-            return a["x"] - (b["x"] + b["w"])
-        return 0
-    if a["y"] + a["h"] < b["y"]:
-        return b["y"] - (a["y"] + a["h"])
-    if b["y"] + b["h"] < a["y"]:
-        return a["y"] - (b["y"] + b["h"])
-    return 0
-
-
-def _overlap(a, b, axis: str) -> int:
-    if axis == "y":
-        return min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
-    return min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
-
-
-def _union_box(a, b) -> dict:
-    x0 = min(a["x"], b["x"])
-    y0 = min(a["y"], b["y"])
-    x1 = max(a["x"] + a["w"], b["x"] + b["w"])
-    y1 = max(a["y"] + a["h"], b["y"] + b["h"])
-    return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
-
-
-def _merge_ink(boxes: list[dict]) -> list[dict]:
-    items = [dict(b) for b in boxes]
-    changed = True
-    while changed and len(items) > 1:
-        changed = False
-        used = [False] * len(items)
-        nxt = []
-        for i, box in enumerate(items):
-            if used[i]:
-                continue
-            acc = dict(box)
-            for j in range(i + 1, len(items)):
-                if used[j]:
-                    continue
-                other = items[j]
-                near_h = _overlap(acc, other, "y") >= 0.45 * min(acc["h"], other["h"]) and _gap(acc, other, "x") <= max(6, int(0.9 * max(acc["h"], other["h"])))
-                near_v = _overlap(acc, other, "x") >= 0.45 * min(acc["w"], other["w"]) and _gap(acc, other, "y") <= max(6, int(0.9 * max(acc["w"], other["w"])))
-                if near_h or near_v:
-                    acc = _union_box(acc, other)
-                    used[j] = True
-                    changed = True
-            nxt.append(acc)
-        items = nxt
-    return items
-
-
-def _ink_lines(gray_bytes: bytes, width: int, height: int) -> list[dict]:
-    """Dark strokes against a coarse local background. Sparse outlines are ignored."""
-    from PIL import Image
-    small = Image.frombytes("L", (width, height), gray_bytes)
-    blur = small.resize((max(1, width // 12), max(1, height // 12)), Image.Resampling.BOX)
-    blur = blur.resize((width, height), Image.Resampling.BILINEAR)
-    bg = blur.tobytes()
-    mask = bytearray(width * height)
-    for i, (pix, back) in enumerate(zip(gray_bytes, bg)):
-        if pix < 170 and pix + 26 < back:
-            mask[i] = 1
-    raw = _cc_boxes(mask, width, height, min_area=max(8, width * height // 8000))
-    return _merge_ink(raw)
-
-
 def detect_balloons(image, rtl: bool = True) -> list[dict]:
-    """Find outlined bright blobs. `image` is a Pillow image. Boxes are in original pixels."""
-    from PIL import Image
-    im = image.convert("RGB")
-    width, height = im.size
-    scale = 1.0
-    max_edge = 1000
-    if max(width, height) > max_edge:
-        scale = max_edge / max(width, height)
-        small = im.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.Resampling.BILINEAR)
-    else:
-        small = im
-    gray = small.convert("L")
-    gw, gh = gray.size
-    pix = gray.tobytes()
-    total = gw * gh
-    white = bytearray(1 if pix[i] >= 242 else 0 for i in range(total))
-    seen = bytearray(total)
-    min_area = max(80, int(total * 0.002))
-    max_area = int(total * 0.45)
-    boxes = []
-    for start in range(total):
-        if not white[start] or seen[start]:
-            continue
-        stack = [start]
-        seen[start] = 1
-        count = 0
-        minx = maxx = start % gw
-        miny = maxy = start // gw
-        touches = False
-        while stack:
-            i = stack.pop()
-            x, y = i % gw, i // gw
-            count += 1
-            if x < minx:
-                minx = x
-            elif x > maxx:
-                maxx = x
-            if y < miny:
-                miny = y
-            elif y > maxy:
-                maxy = y
-            if x == 0 or y == 0 or x == gw - 1 or y == gh - 1:
-                touches = True
-            for j, ok in ((i - 1, x > 0), (i + 1, x + 1 < gw), (i - gw, y > 0), (i + gw, y + 1 < gh)):
-                if ok and white[j] and not seen[j]:
-                    seen[j] = 1
-                    stack.append(j)
-        if touches or count < min_area or count > max_area:
-            continue
-        bw, bh = maxx - minx + 1, maxy - miny + 1
-        if bw < 8 or bh < 8 or bw / bh > 8 or bh / bw > 8:
-            continue
-        inv = 1.0 / scale
-        x0 = max(0, min(width - 1, int(round(minx * inv))))
-        y0 = max(0, min(height - 1, int(round(miny * inv))))
-        x1 = max(x0 + 1, min(width, int(round((maxx + 1) * inv))))
-        y1 = max(y0 + 1, min(height, int(round((maxy + 1) * inv))))
-        flags = []
-        if x0 <= 1 or y0 <= 1 or x1 >= width - 1 or y1 >= height - 1:
-            flags.append("placement-uncertain")
-        if (x1 - x0) * (y1 - y0) > 0.30 * width * height:
-            flags.append("placement-uncertain")
-        boxes.append({
-            "x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0,
-            "direction": direction_of(x1 - x0, y1 - y0),
-            "confidence": 0.8, "flags": flags,
-        })
-    inv = 1.0 / scale
-    ink = []
-    for line in _ink_lines(pix, gw, gh):
-        x0 = max(0, min(width - 1, int(round(line["x"] * inv))))
-        y0 = max(0, min(height - 1, int(round(line["y"] * inv))))
-        x1 = max(x0 + 1, min(width, int(round((line["x"] + line["w"]) * inv))))
-        y1 = max(y0 + 1, min(height, int(round((line["y"] + line["h"]) * inv))))
-        if (x1 - x0) * (y1 - y0) > 0.2 * width * height:
-            continue
-        line_box = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
-        hits = 0
-        for box in boxes:
-            if not (line_box["x"] + line_box["w"] < box["x"] or box["x"] + box["w"] < line_box["x"]
-                    or line_box["y"] + line_box["h"] < box["y"] or box["y"] + box["h"] < line_box["y"]):
-                hits += 1
-        if hits >= 2:
-            continue
-        ink.append(line_box)
-    claimed = set()
-    for box in boxes:
-        inside = []
-        for i, line in enumerate(ink):
-            cx = line["x"] + line["w"] / 2
-            cy = line["y"] + line["h"] / 2
-            if box["x"] - 8 <= cx <= box["x"] + box["w"] + 8 and box["y"] - 8 <= cy <= box["y"] + box["h"] + 8:
-                inside.append(i)
-        if not inside:
-            continue
-        claimed.update(inside)
-        verts = sum(1 for i in inside if ink[i]["h"] >= ink[i]["w"] * 1.15)
-        hors = len(inside) - verts
-        if verts and hors:
-            box["flags"].append("direction-uncertain")
-            box["confidence"] = min(box["confidence"], 0.5)
-        if verts >= hors and verts:
-            box["direction"] = "vertical"
-    for i, line in enumerate(ink):
-        if i in claimed:
-            continue
-        flags = ["outside-balloon"]
-        if line["x"] <= 1 or line["y"] <= 1:
-            flags.append("placement-uncertain")
-        boxes.append({
-            "x": line["x"], "y": line["y"], "w": line["w"], "h": line["h"],
-            "direction": direction_of(line["w"], line["h"]),
-            "confidence": 0.5, "flags": flags,
-        })
-    return order_manga_regions(boxes, rtl=rtl, page_h=height)
+    """Text lines only. The name stays so older callers keep working."""
+    from .text_lines import detect_text_lines
+    return detect_text_lines(image, rtl=rtl)
 
 
 def gpu_info() -> dict:
@@ -607,7 +426,7 @@ def recognize_page(path: str, backend: OcrBackend, rtl: bool = True) -> tuple[li
                     "ocr_text": text, "confidence": conf, "flags": flags,
                     "review": 1 if needs_review(conf, flags) else 0,
                 })
-            if len(detected) != len(regions):
+            if detected and len(detected) != len(regions):
                 for region in regions:
                     if "detection-count-mismatch" not in region["flags"]:
                         region["flags"].append("detection-count-mismatch")

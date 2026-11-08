@@ -49,7 +49,7 @@ textarea{min-height:52px}
    <select id="ocr_backend"><option value="auto">자동 (GPU 있으면 선택 백엔드, 없으면 Tesseract CPU)</option>
    <option value="tesseract">Tesseract (CPU)</option><option value="rapidocr">RapidOCR (선택 설치)</option><option value="easyocr">EasyOCR (선택 설치)</option></select>
    <p class="muted" id="ocrstate">OCR 상태를 확인하는 중…</p>
-   <p class="muted">말풍선·글자 검출과 배경 복원은 CPU 휴리스틱입니다. 학습된 검출 모델을 넣지 않았고, 빈 OCR이나 넘치는 식자는 성공이 아니라 검토입니다.</p>
+   <p class="muted">글자는 가로 한 줄·세로 한 열로 잡습니다. 칸 전체를 지우지 않고, 확신이 낮은 영역은 원본을 유지한 채 검토입니다. 학습된 검출 모델은 넣지 않았습니다.</p>
   </div>
  </div>
  <div class="card"><h2>2. AI 모델</h2>

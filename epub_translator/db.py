@@ -77,6 +77,14 @@ CREATE INDEX IF NOT EXISTS ix_regions_page ON regions(job_id, page_id, idx);
             "INSERT OR IGNORE INTO schema_migrations(id, applied) VALUES('2026-11-image-modes', ?)",
             (time.time(),),
         )
+        region_cols = self._colnames("regions")
+        if region_cols and "group_id" not in region_cols:
+            self.conn.execute("ALTER TABLE regions ADD COLUMN group_id TEXT")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations(id, applied) VALUES('2026-11-line-groups', ?)",
+                (time.time(),),
+            )
+            self.conn.commit()
 
     def x(self, sql, args=(), many=False):
         with self.lock:
