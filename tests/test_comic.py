@@ -45,7 +45,7 @@ def test_inpaint_removes_flat_ink_and_flags_pattern():
     draw = ImageDraw.Draw(im)
     draw.rectangle((30, 30, 50, 50), fill=(0, 0, 0))
     out, notes = restore_regions(im, [(10, 10, 60, 60)])
-    assert notes[0]["method"] == "flat-fill" and notes[0]["confident"]
+    assert notes[0]["method"] == "text-mask" and notes[0]["confident"]
     assert out.getpixel((40, 40))[0] > 200
     assert im.getpixel((40, 40)) == (0, 0, 0)  # source image unchanged
     noisy = Image.new("RGB", (80, 80), (255, 255, 255))

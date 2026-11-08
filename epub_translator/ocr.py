@@ -17,7 +17,8 @@ from .safety import OcrUnavailable
 
 REVIEW_FLAGS = {
     "placement-uncertain", "ocr-empty", "low-confidence", "inpaint-flat-plate",
-    "ocr-failed", "ocr-backend-error",
+    "ocr-failed", "ocr-backend-error", "typeset-overflow", "outside-balloon",
+    "direction-uncertain",
 }
 
 
@@ -32,7 +33,7 @@ def direction_of(w: int, h: int) -> str:
 
 
 def order_regions(regions: list[dict], rtl: bool = True) -> list[dict]:
-    """Manga reading order: rows from top to bottom, and right-to-left inside a row when rtl."""
+    """Rows top to bottom. Inside a row, right-to-left when rtl."""
     items = [dict(r) for r in regions]
     if not items:
         return []
@@ -51,6 +52,171 @@ def order_regions(regions: list[dict], rtl: bool = True) -> list[dict]:
     for i, region in enumerate(ordered):
         region["idx"] = i
     return ordered
+
+
+def order_manga_regions(regions: list[dict], rtl: bool = True, page_h: int | None = None) -> list[dict]:
+    """Panel bands from top to bottom. Vertical text in a band is ordered as columns.
+
+    Japanese vertical columns run right-to-left, and each column runs top to bottom.
+    Horizontal balloons stay in row order. This is an independent reading-order rule,
+    not a copy of another application's sorter.
+    """
+    items = [dict(r) for r in regions]
+    if not items:
+        return []
+    heights = sorted(r["h"] for r in items)
+    median_h = heights[len(heights) // 2]
+    gap_limit = max(28, int(median_h * 0.9))
+    if page_h:
+        gap_limit = max(gap_limit, int(page_h * 0.04))
+    items.sort(key=lambda r: (r["y"], r["x"]))
+    bands: list[list] = [[items[0]]]
+    for region in items[1:]:
+        prev = bands[-1][-1]
+        gap = region["y"] - (prev["y"] + prev["h"])
+        if gap > gap_limit:
+            bands.append([region])
+        else:
+            bands[-1].append(region)
+    ordered = []
+    for band in bands:
+        vertical = [r for r in band if r["h"] >= r["w"] * 1.2]
+        if vertical and len(vertical) * 2 >= len(band):
+            columns: list[list] = []
+            for region in sorted(vertical, key=lambda r: r["x"] + r["w"] / 2, reverse=bool(rtl)):
+                cx = region["x"] + region["w"] / 2
+                placed = False
+                for column in columns:
+                    ccx = sum(c["x"] + c["w"] / 2 for c in column) / len(column)
+                    if abs(cx - ccx) <= max(region["w"], column[0]["w"]) * 0.8:
+                        column.append(region)
+                        placed = True
+                        break
+                if not placed:
+                    columns.append([region])
+            if rtl:
+                columns.sort(key=lambda col: -sum(c["x"] for c in col) / len(col))
+            else:
+                columns.sort(key=lambda col: sum(c["x"] for c in col) / len(col))
+            for column in columns:
+                column.sort(key=lambda r: r["y"])
+                ordered.extend(column)
+            horizontal = [r for r in band if r not in vertical]
+            ordered.extend(order_regions(horizontal, rtl=rtl))
+        else:
+            ordered.extend(order_regions(band, rtl=rtl))
+    for i, region in enumerate(ordered):
+        region["idx"] = i
+    return ordered
+
+
+def _cc_boxes(mask: bytearray, width: int, height: int, min_area: int) -> list[dict]:
+    seen = bytearray(width * height)
+    boxes = []
+    for start in range(width * height):
+        if not mask[start] or seen[start]:
+            continue
+        stack = [start]
+        seen[start] = 1
+        count = 0
+        minx = maxx = start % width
+        miny = maxy = start // width
+        while stack:
+            i = stack.pop()
+            x, y = i % width, i // width
+            count += 1
+            if x < minx:
+                minx = x
+            elif x > maxx:
+                maxx = x
+            if y < miny:
+                miny = y
+            elif y > maxy:
+                maxy = y
+            for j, ok in ((i - 1, x > 0), (i + 1, x + 1 < width), (i - width, y > 0), (i + width, y + 1 < height)):
+                if ok and mask[j] and not seen[j]:
+                    seen[j] = 1
+                    stack.append(j)
+        bw, bh = maxx - minx + 1, maxy - miny + 1
+        if count < min_area or bw < 2 or bh < 2:
+            continue
+        if bw * bh > 400 and count / (bw * bh) < 0.12:
+            continue
+        if bw > width * 0.72 and bh < 7:
+            continue
+        if bh > height * 0.72 and bw < 7:
+            continue
+        boxes.append({"x": minx, "y": miny, "w": bw, "h": bh})
+    return boxes
+
+
+def _gap(a, b, axis: str) -> int:
+    if axis == "x":
+        if a["x"] + a["w"] < b["x"]:
+            return b["x"] - (a["x"] + a["w"])
+        if b["x"] + b["w"] < a["x"]:
+            return a["x"] - (b["x"] + b["w"])
+        return 0
+    if a["y"] + a["h"] < b["y"]:
+        return b["y"] - (a["y"] + a["h"])
+    if b["y"] + b["h"] < a["y"]:
+        return a["y"] - (b["y"] + b["h"])
+    return 0
+
+
+def _overlap(a, b, axis: str) -> int:
+    if axis == "y":
+        return min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
+    return min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+
+
+def _union_box(a, b) -> dict:
+    x0 = min(a["x"], b["x"])
+    y0 = min(a["y"], b["y"])
+    x1 = max(a["x"] + a["w"], b["x"] + b["w"])
+    y1 = max(a["y"] + a["h"], b["y"] + b["h"])
+    return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+
+def _merge_ink(boxes: list[dict]) -> list[dict]:
+    items = [dict(b) for b in boxes]
+    changed = True
+    while changed and len(items) > 1:
+        changed = False
+        used = [False] * len(items)
+        nxt = []
+        for i, box in enumerate(items):
+            if used[i]:
+                continue
+            acc = dict(box)
+            for j in range(i + 1, len(items)):
+                if used[j]:
+                    continue
+                other = items[j]
+                near_h = _overlap(acc, other, "y") >= 0.45 * min(acc["h"], other["h"]) and _gap(acc, other, "x") <= max(6, int(0.9 * max(acc["h"], other["h"])))
+                near_v = _overlap(acc, other, "x") >= 0.45 * min(acc["w"], other["w"]) and _gap(acc, other, "y") <= max(6, int(0.9 * max(acc["w"], other["w"])))
+                if near_h or near_v:
+                    acc = _union_box(acc, other)
+                    used[j] = True
+                    changed = True
+            nxt.append(acc)
+        items = nxt
+    return items
+
+
+def _ink_lines(gray_bytes: bytes, width: int, height: int) -> list[dict]:
+    """Dark strokes against a coarse local background. Sparse outlines are ignored."""
+    from PIL import Image
+    small = Image.frombytes("L", (width, height), gray_bytes)
+    blur = small.resize((max(1, width // 12), max(1, height // 12)), Image.Resampling.BOX)
+    blur = blur.resize((width, height), Image.Resampling.BILINEAR)
+    bg = blur.tobytes()
+    mask = bytearray(width * height)
+    for i, (pix, back) in enumerate(zip(gray_bytes, bg)):
+        if pix < 170 and pix + 26 < back:
+            mask[i] = 1
+    raw = _cc_boxes(mask, width, height, min_area=max(8, width * height // 8000))
+    return _merge_ink(raw)
 
 
 def detect_balloons(image, rtl: bool = True) -> list[dict]:
@@ -121,7 +287,54 @@ def detect_balloons(image, rtl: bool = True) -> list[dict]:
             "direction": direction_of(x1 - x0, y1 - y0),
             "confidence": 0.8, "flags": flags,
         })
-    return order_regions(boxes, rtl=rtl)
+    inv = 1.0 / scale
+    ink = []
+    for line in _ink_lines(pix, gw, gh):
+        x0 = max(0, min(width - 1, int(round(line["x"] * inv))))
+        y0 = max(0, min(height - 1, int(round(line["y"] * inv))))
+        x1 = max(x0 + 1, min(width, int(round((line["x"] + line["w"]) * inv))))
+        y1 = max(y0 + 1, min(height, int(round((line["y"] + line["h"]) * inv))))
+        if (x1 - x0) * (y1 - y0) > 0.2 * width * height:
+            continue
+        line_box = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+        hits = 0
+        for box in boxes:
+            if not (line_box["x"] + line_box["w"] < box["x"] or box["x"] + box["w"] < line_box["x"]
+                    or line_box["y"] + line_box["h"] < box["y"] or box["y"] + box["h"] < line_box["y"]):
+                hits += 1
+        if hits >= 2:
+            continue
+        ink.append(line_box)
+    claimed = set()
+    for box in boxes:
+        inside = []
+        for i, line in enumerate(ink):
+            cx = line["x"] + line["w"] / 2
+            cy = line["y"] + line["h"] / 2
+            if box["x"] - 8 <= cx <= box["x"] + box["w"] + 8 and box["y"] - 8 <= cy <= box["y"] + box["h"] + 8:
+                inside.append(i)
+        if not inside:
+            continue
+        claimed.update(inside)
+        verts = sum(1 for i in inside if ink[i]["h"] >= ink[i]["w"] * 1.15)
+        hors = len(inside) - verts
+        if verts and hors:
+            box["flags"].append("direction-uncertain")
+            box["confidence"] = min(box["confidence"], 0.5)
+        if verts >= hors and verts:
+            box["direction"] = "vertical"
+    for i, line in enumerate(ink):
+        if i in claimed:
+            continue
+        flags = ["outside-balloon"]
+        if line["x"] <= 1 or line["y"] <= 1:
+            flags.append("placement-uncertain")
+        boxes.append({
+            "x": line["x"], "y": line["y"], "w": line["w"], "h": line["h"],
+            "direction": direction_of(line["w"], line["h"]),
+            "confidence": 0.5, "flags": flags,
+        })
+    return order_manga_regions(boxes, rtl=rtl, page_h=height)
 
 
 def gpu_info() -> dict:
@@ -210,13 +423,16 @@ class TesseractBackend(OcrBackend):
     real = True
     label = "tesseract (CPU)"
 
-    def recognize(self, image, direction: str):
-        from PIL import Image
-        lang = "jpn_vert" if direction == "vertical" and "jpn_vert" in tesseract_langs() else "jpn"
+    def _once(self, image, direction: str):
+        from PIL import Image, ImageOps
+        langs = tesseract_langs()
+        lang = "jpn_vert" if direction == "vertical" and "jpn_vert" in langs else "jpn"
         psm = "5" if direction == "vertical" else "6"
-        im = image.convert("RGB")
-        if min(im.size) < 40:
-            im = im.resize((im.width * 2, im.height * 2), Image.Resampling.NEAREST)
+        im = ImageOps.autocontrast(image.convert("L")).convert("RGB")
+        short = min(im.size)
+        if short < 64:
+            factor = max(2, (64 + short - 1) // short)
+            im = im.resize((im.width * factor, im.height * factor), Image.Resampling.NEAREST)
         pad = Image.new("RGB", (im.width + 16, im.height + 16), (255, 255, 255))
         pad.paste(im, (8, 8))
         import io
@@ -245,6 +461,15 @@ class TesseractBackend(OcrBackend):
         text = normalize_ocr_text("".join(words))
         conf = (sum(confs) / len(confs) / 100.0) if confs else 0.0
         flags = [] if text else ["ocr-empty"]
+        return text, conf, flags
+
+    def recognize(self, image, direction: str):
+        text, conf, flags = self._once(image, direction)
+        other = "horizontal" if direction == "vertical" else "vertical"
+        if conf < 0.55 or not text:
+            alt, alt_conf, alt_flags = self._once(image, other)
+            if alt_conf > conf and alt:
+                return alt, alt_conf, alt_flags + ["direction-checked"]
         return text, conf, flags
 
 

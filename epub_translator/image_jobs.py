@@ -16,7 +16,7 @@ import time
 
 from .cbz_convert import extract_cbz_member, scan_cbz
 from .epub_model import DRMError, sha256_file
-from .fxl import compare_output, fit_font_size, write_fxl_epub
+from .fxl import compare_output, layout_korean_text, write_fxl_epub
 from .inpaint import restore_regions
 from .ocr import gpu_info, make_backend, needs_review, recognize_page
 from .pdf_convert import PdfEncrypted, extract_pdf_page, inspect_pdf
@@ -25,8 +25,8 @@ from .safety import RightsError, SafetyError, clamp_dpi, clamp_parallel, configu
 
 LIMITS = [
     "말풍선 검출은 테두리로 닫힌 밝은 영역의 휴리스틱입니다. 효과선·반투명·겹친 말풍선은 놓치거나 합쳐질 수 있습니다.",
-    "일본어 제거는 생성형 인페인트가 아닙니다. 평탄한 색만 획 단위로 칠하고, 복잡하면 단색 플레이트로 가리며 검토로 표시합니다.",
-    "한국어 식자는 고정 레이아웃 HTML 오버레이입니다. 글자 크기는 영역 대비 추정치이고 편집기에서 고칩니다.",
+    "일본어 제거는 생성형 인페인트가 아닙니다. 평탄한 배경에서는 글자 마스크만 칠하고, 무늬가 있으면 단색 플레이트로 가리며 검토로 표시합니다.",
+    "한국어 식자는 고정 레이아웃 HTML 오버레이입니다. 영역에 안 들어가면 typeset-overflow로 검토가 되고, 편집기에서 고칩니다.",
     "OCR은 설치된 Tesseract, RapidOCR, EasyOCR의 품질에 따릅니다. GPU는 그 백엔드가 CUDA를 제공할 때만 씁니다.",
     "원본 파일과 orig/ 아래 추출 이미지는 다시 인코딩하지 않습니다. 만화 모드의 work PNG는 파생 이미지입니다.",
 ]
@@ -500,20 +500,23 @@ def _typeset_page(jm, job_id, page, settings) -> dict:
             text = (region.get("translation") or "").strip()
             if not text:
                 continue
-            size = region.get("font_size")
-            tight = False
-            if not size:
-                size, tight = fit_font_size(text, int(region["w"]), int(region["h"]), region.get("direction") == "vertical")
+            vertical = region.get("direction") == "vertical"
+            laid = layout_korean_text(text, int(region["w"]), int(region["h"]), vertical)
+            size = float(region["font_size"]) if region.get("font_size") else laid["font_size"]
+            shown = laid["text"] if not region.get("font_size") else text
+            if not region.get("font_size"):
                 jm.db.x("UPDATE regions SET font_size=? WHERE job_id=? AND region_id=?", (size, job_id, region["region_id"]))
-            if tight:
-                flags = json.loads(region.get("flags") or "[]")
-                if "typeset-tight" not in flags:
-                    flags.append("typeset-tight")
-                    jm.db.x("UPDATE regions SET flags=? WHERE job_id=? AND region_id=?",
-                            (json.dumps(flags, ensure_ascii=False), job_id, region["region_id"]))
+            flags = json.loads(region.get("flags") or "[]")
+            if laid["overflow"] or size <= 10:
+                if "typeset-overflow" not in flags:
+                    flags.append("typeset-overflow")
+                jm.db.x(
+                    "UPDATE regions SET flags=?, review=1 WHERE job_id=? AND region_id=?",
+                    (json.dumps(flags, ensure_ascii=False), job_id, region["region_id"]),
+                )
             overlays.append({
                 "x": int(region["x"]), "y": int(region["y"]), "w": int(region["w"]), "h": int(region["h"]),
-                "text": text, "font": region.get("font") or "gothic", "font_size": float(size),
+                "text": shown, "font": region.get("font") or "gothic", "font_size": float(size),
                 "direction": region.get("direction") or "horizontal",
             })
     return {"page_id": page["page_id"], "idx": page["idx"], "width": width, "height": height,
@@ -609,7 +612,7 @@ async def _finalize_image(jm, job_id, settings, retranslation=None):
         "quality": quality,
         "omission": omission,
         "failed_pages": failed_pages,
-        "inpaint": "heuristic-flat-fill-or-plate",
+        "inpaint": "text-mask-or-flat-plate",
     }
     from .engines import price_for
     report = {

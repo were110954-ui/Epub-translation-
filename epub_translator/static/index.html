@@ -48,7 +48,8 @@ textarea{min-height:52px}
   <div id="ocrBox" style="display:none"><label>OCR 백엔드</label>
    <select id="ocr_backend"><option value="auto">자동 (GPU 있으면 선택 백엔드, 없으면 Tesseract CPU)</option>
    <option value="tesseract">Tesseract (CPU)</option><option value="rapidocr">RapidOCR (선택 설치)</option><option value="easyocr">EasyOCR (선택 설치)</option></select>
-   <p class="muted">말풍선 검출·배경 복원·식자 크기는 휴리스틱입니다. 생성형 인페인트가 아니며, 불확실한 OCR/배치는 검토로 표시됩니다.</p>
+   <p class="muted" id="ocrstate">OCR 상태를 확인하는 중…</p>
+   <p class="muted">말풍선·글자 검출과 배경 복원은 CPU 휴리스틱입니다. 학습된 검출 모델을 넣지 않았고, 빈 OCR이나 넘치는 식자는 성공이 아니라 검토입니다.</p>
   </div>
  </div>
  <div class="card"><h2>2. AI 모델</h2>
@@ -111,7 +112,8 @@ const $=id=>document.getElementById(id);
 async function api(u,o){const r=await fetch(u,o);if(!r.ok){let t=await r.text();try{t=JSON.parse(t).detail}catch(e){}throw new Error(t)}
  const ct=r.headers.get('content-type')||'';if(ct.includes('json'))return r.json();return r.text()}
 function fd(o){const f=new FormData();for(const k in o)if(o[k]!==undefined&&o[k]!==null)f.append(k,o[k]);return f}
-async function loadCfg(){const c=await api('/api/config');window.CFG=c;$('keystate').textContent='저장된 키: '+Object.entries(c.keys).filter(([k,v])=>v).map(([k,v])=>k+' '+v).join(', ')||'없음';syncModel();}
+async function loadCfg(){const c=await api('/api/config');window.CFG=c;$('keystate').textContent='저장된 키: '+Object.entries(c.keys).filter(([k,v])=>v).map(([k,v])=>k+' '+v).join(', ')||'없음';syncModel();
+ try{const o=await api('/api/ocr-status');$('ocrstate').textContent=o.note;}catch(e){$('ocrstate').textContent='OCR 상태를 읽지 못했습니다.';}}
 function syncModel(){const e=$('engine').value;$('model').placeholder='기본: '+(window.CFG?CFG.default_models[e]:'');$('baseurlbox').style.display=e=='openai_compatible'?'block':'none'}
 $('engine').onchange=syncModel;
 $('file').onchange=syncMode;$('comic').onchange=syncMode;

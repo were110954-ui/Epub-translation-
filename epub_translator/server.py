@@ -35,6 +35,18 @@ def index():
     return open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
 
 
+@app.get("/api/ocr-status")
+def ocr_status():
+    from .ocr import available_backends, gpu_info
+    backends = available_backends()
+    gpu = gpu_info()
+    if backends:
+        note = "사용 가능: " + ", ".join(backends) + ". " + gpu.get("note", "")
+    else:
+        note = "일본어 OCR 백엔드가 없습니다. 만화 자동 인식은 시작하지 않으며, 빈 결과를 성공으로 처리하지 않습니다."
+    return {"backends": backends, "gpu": gpu, "note": note}
+
+
 @app.get("/api/config")
 def config():
     return {"keys": masked(), "default_models": DEFAULT_MODELS, "prices": PRICES}

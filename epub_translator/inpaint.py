@@ -51,9 +51,14 @@ def _restore_one(image, box, Image, ImageDraw) -> dict:
         return {"method": "flat-plate", "confident": False,
                 "note": "테두리 색이 고르지 않아 단색 플레이트로 가렸습니다. 생성형 인페인트가 아니며 무늬는 복원되지 않습니다."}
     luma = sum(color) / 3.0
-    mask = crop.convert("L").point(lambda p, t=luma - 40: 255 if p < t else 0)
+    mask = crop.convert("L").point(lambda p, t=luma - 36: 255 if p < t else 0)
+    from PIL import ImageFilter
+    mask = mask.filter(ImageFilter.MaxFilter(3))
+    if mask.getextrema()[1] == 0:
+        return {"method": "text-mask-empty", "confident": True,
+                "note": "지울 획이 없어 원본 픽셀을 유지했습니다."}
     plate = Image.new("RGB", crop.size, color)
     cleaned = Image.composite(plate, crop, mask)
     image.paste(cleaned, (x1, y1))
-    return {"method": "flat-fill", "confident": True,
-            "note": "평탄한 말풍선 안의 어두운 획만 추정 배경색으로 바꾸었습니다. 그라데이션은 복원되지 않습니다."}
+    return {"method": "text-mask", "confident": True,
+            "note": "글자 마스크만 팽창해 주변 배경색으로 채웠습니다. 생성형 인페인트가 아니며 무늬는 복원되지 않습니다."}

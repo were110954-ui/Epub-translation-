@@ -90,7 +90,8 @@ def _page_xhtml(page: dict, image_href: str | None) -> str:
             f'left:{int(region["x"])}px;top:{int(region["y"])}px;width:{int(region["w"])}px;height:{int(region["h"])}px;'
             f'font-size:{float(region.get("font_size") or 16):.1f}px;font-family:{_font_css(region.get("font"))}'
         )
-        parts.append(f'<div class="{cls}" style="{style}">{_xe(region["text"])}</div>')
+        lines = [line for line in str(region["text"]).split("\n")]
+        parts.append(f'<div class="{cls}" style="{style}">{"<br/>".join(_xe(line) for line in lines)}</div>')
     parts.append("</div></body></html>")
     return "\n".join(parts)
 
@@ -283,15 +284,36 @@ def _file_sha(path: str) -> str:
     return h.hexdigest()
 
 
+def layout_korean_text(text: str, w: int, h: int, vertical: bool) -> dict:
+    """Fit Korean text inside a balloon. Overflow stays visible as a review flag.
+
+    Width is estimated at about one em per Hangul syllable. This is not a shaped-font measurement.
+    """
+    raw = (text or "").strip()
+    if w < 8 or h < 8 or not raw:
+        return {"font_size": 8.0, "text": raw, "overflow": True}
+    for size in [i / 2 for i in range(int(min(42, max(h, 8)) * 2), 15, -1)]:
+        wrapped = _wrap_korean(raw, w, h, size, vertical)
+        if wrapped and _korean_fits(wrapped, w, h, size, vertical):
+            return {"font_size": size, "text": "\n".join(wrapped), "overflow": False}
+    return {"font_size": 8.0, "text": "\n".join(_wrap_korean(raw, w, h, 8.0, vertical)), "overflow": True}
+
+
+def _wrap_korean(text: str, w: int, h: int, size: float, vertical: bool) -> list[str]:
+    if vertical:
+        per = max(1, int((h * 0.88) / (size * 1.05)))
+    else:
+        per = max(1, int((w * 0.9) / (size * 0.95)))
+    return [text[i:i + per] for i in range(0, len(text), per)] or [text]
+
+
+def _korean_fits(lines: list[str], w: int, h: int, size: float, vertical: bool) -> bool:
+    if vertical:
+        return len(lines) * size * 1.15 <= w * 0.92 and max(len(line) for line in lines) * size * 1.05 <= h * 0.92
+    return len(lines) * size * 1.25 <= h * 0.92 and max(len(line) for line in lines) * size <= w * 0.95
+
+
 def fit_font_size(text: str, w: int, h: int, vertical: bool) -> tuple[float, bool]:
     """Rough balloon fit. The editor can override it. Returns (px, tight)."""
-    n = max(1, len((text or "").strip()))
-    if vertical:
-        size = min(h / n * 0.95, w * 0.72)
-    else:
-        cols = max(1, min(n, max(1, int(w / 16) or 1)))
-        rows = max(1, (n + cols - 1) // cols)
-        size = min(w / cols * 0.95, h / rows * 0.82)
-    tight = size < 11
-    size = max(10.0, min(42.0, size))
-    return round(size, 1), tight
+    laid = layout_korean_text(text, w, h, vertical)
+    return laid["font_size"], laid["overflow"] or laid["font_size"] <= 10
